@@ -1,0 +1,8 @@
+# PostgreSQL
+*.sql.bak
+*.dump
+
+# Editor
+.vscode/settings.json
+*.swp
+*~

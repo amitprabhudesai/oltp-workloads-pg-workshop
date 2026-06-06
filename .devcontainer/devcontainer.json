@@ -1,0 +1,31 @@
+{
+  "name": "OLTP Workloads — PostgreSQL Workshop",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "workspace",
+  "workspaceFolder": "/workspace",
+  "forwardPorts": [5432],
+  "remoteUser": "vscode",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "mtxr.sqltools",
+        "mtxr.sqltools-driver-pg"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "sqltools.connections": [
+          {
+            "name": "workshop",
+            "driver": "PostgreSQL",
+            "server": "postgres",
+            "port": 5432,
+            "database": "workshop",
+            "username": "workshop",
+            "password": "workshop"
+          }
+        ]
+      }
+    }
+  },
+  "postCreateCommand": "bash /workspace/.devcontainer/post-create.sh"
+}
