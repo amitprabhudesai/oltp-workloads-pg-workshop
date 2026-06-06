@@ -1,7 +1,27 @@
 # Module 99: Permission Verification
 
-Run this as `participant` to confirm the role setup is working correctly
-before starting the workshop exercises.
+This module is intended to be run by a rootconf volunteer/verifier before
+the workshop to confirm the environment is set up correctly.
+
+## Before you start: reset to a clean baseline
+
+The seed data may have accumulated extra rows if the setup scripts were run
+more than once. Always reset before verifying:
+
+```bash
+bash /workspace/scripts/reset_db.sh
+```
+
+Expected output after reset:
+```
+ accounts | transfers
+----------+-----------
+      100 |      5000
+```
+
+## Run the permission checks
+
+Connect as `participant` (the role workshop attendees will use):
 
 ```bash
 psql -U participant
