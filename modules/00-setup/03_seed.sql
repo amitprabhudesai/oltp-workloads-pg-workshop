@@ -6,6 +6,8 @@
 -- return to this baseline between exercises if needed.
 -- =============================================================================
 
+SET search_path TO rootconf, public;
+
 BEGIN;
 
 -- 100 accounts, balances between 1,000 and 50,000

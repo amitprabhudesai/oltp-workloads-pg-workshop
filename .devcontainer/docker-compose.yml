@@ -11,8 +11,8 @@ services:
       PGHOST: postgres
       PGPORT: 5432
       PGDATABASE: workshop
-      PGUSER: workshop
-      PGPASSWORD: workshop
+      PGUSER: participant
+      PGPASSWORD: participant
     depends_on:
       postgres:
         condition: service_healthy

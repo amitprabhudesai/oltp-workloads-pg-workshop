@@ -1,8 +1,8 @@
 -- =============================================================================
 -- Workshop Schema: Payments / Transfers
 --
--- A simple payments system. We use this throughout the workshop to illustrate
--- write path concepts in a realistic OLTP context:
+-- All objects live in the 'rootconf' schema.
+-- Each SQL file sets search_path so table names can be used unqualified.
 --
 --   accounts  — hot rows: balance updates drive write contention and MVCC demos
 --   transfers — insert-heavy: good for observing WAL generation
@@ -10,6 +10,10 @@
 -- =============================================================================
 
 BEGIN;
+
+CREATE SCHEMA IF NOT EXISTS rootconf;
+
+SET search_path TO rootconf, public;
 
 CREATE TABLE IF NOT EXISTS accounts (
     id          BIGSERIAL PRIMARY KEY,

@@ -7,6 +7,8 @@
 -- Connect: psql -h postgres -U workshop -d workshop
 -- =============================================================================
 
+SET search_path TO rootconf, public;
+
 \timing on
 \set VERBOSITY verbose
 
@@ -184,12 +186,8 @@ SELECT checkpoints_req FROM pg_stat_bgwriter;
 -- Key insight: after a checkpoint, PostgreSQL only needs to replay WAL from
 -- that checkpoint LSN forward to recover from a crash.
 -- The checkpoint_lsn is the "durability anchor."
-SELECT
-    redo_lsn,
-    checkpoint_lsn,
-    pg_size_pretty(pg_wal_lsn_diff(pg_current_wal_lsn(), checkpoint_lsn)::bigint)
-        AS wal_since_checkpoint
-FROM pg_control_checkpoint();
--- pg_control_checkpoint() shows the last completed checkpoint.
--- wal_since_checkpoint grows as you write; a CHECKPOINT resets it to near zero.
+-- pg_control_checkpoint() requires pg_monitor (superuser-level).
+-- We expose it via a SECURITY DEFINER wrapper so participant can call it.
+SELECT * FROM rootconf.checkpoint_info();
+-- wal_since_checkpoint grows as you write; CHECKPOINT resets it to near zero.
 
