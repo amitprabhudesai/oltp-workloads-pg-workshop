@@ -19,11 +19,10 @@ SET search_path TO rootconf, public;
 -- should be able to answer: "how much WAL does my workload generate?"
 -- =============================================================================
 
--- Step 1: Record your current WAL position (Log Sequence Number).
+-- Step 1: Capture your current WAL position into a psql variable.
 -- An LSN is a byte offset into the WAL stream — it increases monotonically.
-SELECT pg_current_wal_lsn() AS current_lsn;
-
--- Save the output. You will substitute it for <start_lsn> below.
+-- \gset stores query columns as psql variables; reference them as :varname.
+SELECT pg_current_wal_lsn() AS start_lsn \gset
 
 -- Step 2: Insert a batch of transfers to generate WAL.
 INSERT INTO transfers (from_account, to_account, amount, status)
@@ -41,9 +40,8 @@ FROM (
 WHERE a1 <> a2;
 
 -- Step 3: How much WAL did those 10,000 inserts generate?
--- Replace '<start_lsn>' with the value from Step 1.
 SELECT pg_size_pretty(
-    pg_wal_lsn_diff(pg_current_wal_lsn(), '<start_lsn>'::pg_lsn)
+    pg_wal_lsn_diff(pg_current_wal_lsn(), :'start_lsn')
 ) AS wal_generated;
 
 -- Typical result: ~3–5 MB for 10,000 simple rows.
