@@ -20,6 +20,8 @@ echo "==> Loading seed data..."
 $PSQL -f /workspace/modules/00-setup/03_seed.sql
 
 echo ""
+cp /workspace/.devcontainer/psqlrc ~/.psqlrc
+
 echo "Workshop database is ready."
 echo ""
 echo "  Default session (participant):  psql"

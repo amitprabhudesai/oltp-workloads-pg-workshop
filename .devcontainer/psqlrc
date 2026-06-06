@@ -1,0 +1,8 @@
+-- psql configuration for the workshop
+-- Shows: role@database> so it's always clear who you are connected as.
+\set PROMPT1 '%n@%/%R%# '
+\set PROMPT2 '%n@%/%R%# '
+
+-- Useful defaults
+\timing on
+\set VERBOSITY verbose
