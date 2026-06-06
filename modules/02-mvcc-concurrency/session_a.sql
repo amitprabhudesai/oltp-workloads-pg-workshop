@@ -4,7 +4,7 @@
 -- This is the "driver" session. Work through each exercise, pausing where
 -- indicated to let Session B run its steps. The README has the full sequence.
 --
--- Connect: psql -h postgres -U workshop -d workshop
+-- Connect: psql -U participant
 -- =============================================================================
 
 SET search_path TO rootconf, public;

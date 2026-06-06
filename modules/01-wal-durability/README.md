@@ -14,7 +14,7 @@
 Open a terminal in VS Code and connect:
 
 ```bash
-psql -h postgres -U workshop -d workshop
+psql -U participant
 ```
 
 Then work through `exercises.sql` top to bottom.

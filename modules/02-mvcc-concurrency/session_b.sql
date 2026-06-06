@@ -4,7 +4,7 @@
 -- This is the "observer / concurrent writer" session. Only run each step
 -- when Session A tells you to. The README has the full sequence.
 --
--- Connect: psql -h postgres -U workshop -d workshop
+-- Connect: psql -U participant
 -- =============================================================================
 
 SET search_path TO rootconf, public;

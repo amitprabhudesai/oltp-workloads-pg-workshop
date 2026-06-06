@@ -16,12 +16,12 @@ Open **two terminal tabs** in VS Code.
 
 **Tab 1 — Session A:**
 ```bash
-psql -h postgres -U workshop -d workshop
+psql -U participant
 ```
 
 **Tab 2 — Session B:**
 ```bash
-psql -h postgres -U workshop -d workshop
+psql -U participant
 ```
 
 Reset to a clean baseline before starting:

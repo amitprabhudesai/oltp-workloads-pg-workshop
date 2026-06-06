@@ -4,7 +4,7 @@
 -- Run this in a single psql session. Each exercise builds on the previous.
 -- Enable timing at the start and leave it on throughout.
 --
--- Connect: psql -h postgres -U workshop -d workshop
+-- Connect: psql -U participant
 -- =============================================================================
 
 SET search_path TO rootconf, public;
@@ -110,7 +110,7 @@ SHOW synchronous_commit;
 
 -- Benchmark: 500 single-row inserts with synchronous_commit = on
 SET synchronous_commit = on;
-\set start_lsn `psql -h postgres -U workshop -d workshop -Atc "SELECT pg_current_wal_lsn()"`
+\set start_lsn `psql -U participant -Atc "SELECT pg_current_wal_lsn()"`
 
 DO $$
 DECLARE i int;
