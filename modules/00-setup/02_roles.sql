@@ -37,39 +37,54 @@
 -- Group roles (no login — capability levels only)
 -- ---------------------------------------------------------------------------
 
--- Schema owner: may CREATE/ALTER/DROP objects within rootconf.
--- Does NOT have CREATEROLE, CREATEDB, or SUPERUSER.
-CREATE ROLE IF NOT EXISTS rcf_owner      NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE;
+-- Use DO blocks that check pg_roles first — safe to re-run on reset.
+DO $$
+BEGIN
+    -- Schema owner: may CREATE/ALTER/DROP objects within rootconf.
+    -- Does NOT have CREATEROLE, CREATEDB, or SUPERUSER.
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rcf_owner') THEN
+        CREATE ROLE rcf_owner NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE;
+    END IF;
 
--- Contributor: read/write data, execute functions. No DDL.
--- Intended for application users and workshop participants who write data.
-CREATE ROLE IF NOT EXISTS rcf_contributor NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE;
+    -- Contributor: read/write data, execute functions. No DDL.
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rcf_contributor') THEN
+        CREATE ROLE rcf_contributor NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE;
+    END IF;
 
--- Reviewer: identical privileges to rcf_contributor for now.
--- Will become read-only (SELECT + EXECUTE only) once the role model matures.
-CREATE ROLE IF NOT EXISTS rcf_reviewer   NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE;
+    -- Reviewer: identical privileges to rcf_contributor for now.
+    -- Will become read-only (SELECT + EXECUTE only) once the role model matures.
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rcf_reviewer') THEN
+        CREATE ROLE rcf_reviewer NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE;
+    END IF;
 
--- ---------------------------------------------------------------------------
--- Login roles
--- ---------------------------------------------------------------------------
+    -- Login roles --
 
--- amit: personal owner account. Member of rcf_owner — inherits all DDL rights.
--- Change the password immediately in any non-local environment.
-CREATE ROLE IF NOT EXISTS amit LOGIN PASSWORD 'rcfowner'
-    NOSUPERUSER NOCREATEDB NOCREATEROLE
-    CONNECTION LIMIT 10;
+    -- amit: personal owner account. Member of rcf_owner — inherits all DDL rights.
+    -- Change the password immediately in any non-local environment.
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'amit') THEN
+        CREATE ROLE amit LOGIN PASSWORD 'rcfowner'
+            NOSUPERUSER NOCREATEDB NOCREATEROLE
+            CONNECTION LIMIT 10;
+    END IF;
 
--- participant: default devcontainer identity for workshop attendees.
--- Inherits rcf_contributor privileges.
-CREATE ROLE IF NOT EXISTS participant LOGIN PASSWORD 'participant'
-    NOSUPERUSER NOCREATEDB NOCREATEROLE
-    CONNECTION LIMIT 5;
+    -- participant: default devcontainer identity for workshop attendees.
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'participant') THEN
+        CREATE ROLE participant LOGIN PASSWORD 'participant'
+            NOSUPERUSER NOCREATEDB NOCREATEROLE
+            CONNECTION LIMIT 5;
+    END IF;
+END;
+$$;
 
 -- ---------------------------------------------------------------------------
 -- Role memberships
 -- ---------------------------------------------------------------------------
 
-GRANT rcf_owner      TO amit;
+-- rcf_owner subsumes rcf_contributor: an owner can do everything a contributor
+-- can, plus DDL on the schema. Compose rather than duplicate grants.
+GRANT rcf_contributor TO rcf_owner;
+
+GRANT rcf_owner       TO amit;
 GRANT rcf_contributor TO participant;
 
 -- rcf_reviewer gets the same privilege set as rcf_contributor for now.

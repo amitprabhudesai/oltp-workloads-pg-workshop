@@ -2,6 +2,7 @@
 set -euo pipefail
 
 # All setup runs as the 'workshop' superuser. Participants connect as 'participant'.
+export PGPASSWORD=workshop
 PSQL="psql -h postgres -U workshop -d workshop"
 
 echo "==> Waiting for PostgreSQL to be ready..."
