@@ -115,15 +115,14 @@ SELECT id, balance FROM accounts WHERE id = 1;
 --
 -- Demonstrate the dangerous pattern:
 BEGIN;
-SELECT balance AS read_value FROM accounts WHERE id = 1;
--- Application code computes: new_balance = read_value - 200
+SELECT balance AS read_value FROM accounts WHERE id = 1 \gset
+-- \gset stores balance into :read_value — simulating "application read"
 
 -- *** PAUSE — switch to Session B and run step B-8 ***
--- Session B concurrently debits 300, commits. Now our read_value is stale.
+-- Session B concurrently debits 300, commits. Now our :read_value is stale.
 
 -- Step A-10: Write the stale computed value — this OVERWRITES Session B's update.
--- Substitute <read_value - 200> with the value you computed above.
-UPDATE accounts SET balance = <read_value - 200> WHERE id = 1;
+UPDATE accounts SET balance = :read_value - 200 WHERE id = 1;
 COMMIT;
 
 SELECT id, balance FROM accounts WHERE id = 1;
@@ -154,14 +153,13 @@ SELECT id, balance FROM accounts WHERE id = 1 FOR UPDATE;
 
 SELECT
     pid,
-    relation::regclass AS relation,
     locktype,
+    CASE WHEN relation IS NOT NULL THEN relation::regclass::text END AS relation,
     mode,
     granted,
     pg_blocking_pids(pid) AS blocked_by
 FROM pg_locks
 WHERE relation = 'accounts'::regclass
-  AND locktype = 'relation'
 ORDER BY granted DESC, pid;
 
 -- Also look at who is waiting and why:

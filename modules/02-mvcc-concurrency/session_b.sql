@@ -69,12 +69,11 @@ COMMIT;
 
 -- Step B-8 (dangerous pattern demo): Concurrent read-modify-write.
 BEGIN;
-SELECT balance AS read_value FROM accounts WHERE id = 1;
--- Note this value. Session A will now race to update.
+SELECT balance AS read_value FROM accounts WHERE id = 1 \gset
+-- \gset stores balance into :read_value — simulating "application read"
 
--- Compute in your head: new_balance = read_value - 300
--- Wait for Session A's instruction before running the UPDATE.
-UPDATE accounts SET balance = <read_value - 300> WHERE id = 1;
+-- *** Wait for Session A's signal before running the UPDATE. ***
+UPDATE accounts SET balance = :read_value - 300 WHERE id = 1;
 COMMIT;
 
 
