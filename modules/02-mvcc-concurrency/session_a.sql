@@ -1,9 +1,7 @@
 -- =============================================================================
 -- Module 2: MVCC and Concurrency  —  SESSION A
 --
--- This is the "driver" session. Work through each exercise, pausing where
--- indicated to let Session B run its steps. The README has the full sequence.
---
+-- Driver session. Work top to bottom, pausing where indicated for Session B.
 -- Connect: psql -U participant
 -- =============================================================================
 
@@ -12,202 +10,164 @@ SET search_path TO rootconf, public;
 \timing on
 
 -- =============================================================================
--- Warmup: What MVCC looks like under the hood
---
--- Every row version carries system columns PostgreSQL uses to decide visibility.
--- You can read them directly — no extension or special role needed.
--- These are the building blocks for everything in Exercises 2.1–2.4.
+-- Warmup: system columns under the hood
 -- =============================================================================
 
--- W-1: Inspect a live row's system columns.
---   xmin  -- txid that created (inserted) this version
---   xmax  -- txid that deleted/updated it  (0 = still live)
---   ctid  -- physical address: (page_number, item_offset_on_page)
+-- W-1: Read the system columns of a live row.
+--   xmin  — txid that created this version
+--   xmax  — txid that deleted/superseded it  (0 = live)
+--   ctid  — physical address (page, item offset)
 SELECT xmin, xmax, ctid, id, balance
 FROM accounts
 WHERE id = 1;
 
--- W-2: Watch the version chain form inside a transaction.
+-- W-2: Watch a version chain form inside a transaction.
 BEGIN;
 
--- Before the UPDATE — note xmin, xmax, ctid.
 SELECT xmin, xmax, ctid, id, balance
 FROM accounts WHERE id = 1;
+-- Note xmin, xmax, ctid before the update.
 
 UPDATE accounts SET balance = balance - 100 WHERE id = 1;
 
--- After the UPDATE — we see the NEW version only.
---   xmin  = our txid (we created this version)
---   xmax  = 0       (no one has deleted it yet)
---   ctid  = new physical slot on the page
--- The old version (with xmax = our txid) is invisible to normal SELECT.
 SELECT xmin, xmax, ctid, id, balance
 FROM accounts WHERE id = 1;
+-- xmin = our txid, xmax = 0, ctid advanced to a new slot.
+-- The old version is invisible to normal SELECT (xmax = our txid, IN_PROGRESS).
 
-ROLLBACK;  -- undo so Exercise 2.3's starting balance is predictable
+ROLLBACK;  -- keep starting balance predictable for Exercise 2.3
 
--- W-3 (bonus — requires superuser): see BOTH versions simultaneously.
--- pageinspect reads the raw heap page, bypassing visibility rules.
--- To run this block, reconnect as postgres first: \c workshop postgres
+-- W-3 (bonus — requires superuser): see both versions simultaneously via pageinspect.
+-- Reconnect as postgres first: \c workshop postgres
 --
 -- CREATE EXTENSION IF NOT EXISTS pageinspect;
 -- BEGIN;
 -- UPDATE accounts SET balance = balance - 100 WHERE id = 1;
 -- SELECT
---     lp                                           AS slot,
---     t_xmin,
---     t_xmax,
---     t_ctid,
---     (t_infomask & x'0100'::int) > 0              AS xmin_committed,
---     (t_infomask & x'0800'::int) > 0              AS xmax_invalid
+--     lp AS slot, t_xmin, t_xmax, t_ctid,
+--     (t_infomask & x'0100'::int) > 0 AS xmin_committed,
+--     (t_infomask & x'0800'::int) > 0 AS xmax_invalid
 -- FROM heap_page_items(get_raw_page('accounts', 0))
--- WHERE lp_flags = 1       -- Normal items (skip Redirect/Dead/Unused)
---   AND t_xmin IS NOT NULL;
--- -- Expect two rows for account 1:
--- --   old: t_xmax = our txid, xmin_committed = true
--- --   new: t_xmin = our txid, t_xmax = 0
+-- WHERE lp_flags = 1 AND t_xmin IS NOT NULL;
+-- -- Two rows for account 1: old (xmax = our txid), new (xmin = our txid, xmax = 0).
 -- ROLLBACK;
 
 
 -- =============================================================================
--- Exercise 2.1: Snapshot isolation — readers don't block writers
---
--- MVCC (Multi-Version Concurrency Control) means PostgreSQL keeps multiple
--- versions of a row. Each transaction sees a consistent snapshot of the
--- database as it existed when the transaction (or statement) began.
+-- Exercise 2.1: Snapshot isolation
 -- =============================================================================
 
--- Step A-1: Start a transaction and insert a pending transfer.
--- Do NOT commit yet.
+-- Step A-1: Insert a pending transfer. Do NOT commit yet.
 BEGIN;
 
 INSERT INTO transfers (from_account, to_account, amount, status)
 VALUES (1, 2, 250.00, 'pending')
 RETURNING id, status;
 
--- *** PAUSE — switch to Session B and run steps B-1 and B-2 ***
--- Session B will try to SELECT this row. It won't see it.
+-- *** PAUSE — switch to Session B: run B-1, B-2 ***
 
--- Step A-2 (after Session B has run B-2): Now commit.
+-- Step A-2: Commit.
 COMMIT;
 
--- *** PAUSE — switch to Session B and run step B-3 ***
--- Session B will SELECT again. Now it sees the row.
+-- *** PAUSE — switch to Session B: run B-3 ***
+
+-- Discussion:
+-- 1. Why did Session B not see the row before A-2?
+-- 2. xmin on the committed row matches whose txid?
+-- 3. What would xmax show if Session B had deleted the row after A-2?
 
 
 -- =============================================================================
 -- Exercise 2.2: Read Committed vs Repeatable Read
---
--- In READ COMMITTED (PostgreSQL default), each statement gets a fresh snapshot.
--- In REPEATABLE READ, the snapshot is taken at the start of the transaction
--- and held for its duration. This prevents non-repeatable reads.
 -- =============================================================================
 
--- Step A-3: Start a REPEATABLE READ transaction and take a snapshot.
+-- Step A-3: Open a REPEATABLE READ transaction and record the baseline.
 BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ;
 
 SELECT count(*), sum(balance) AS total_balance
 FROM accounts;
--- Note these numbers. They should stay the same for this entire transaction,
--- regardless of what Session B does.
 
--- *** PAUSE — switch to Session B and run steps B-4 and B-5 ***
--- Session B will insert a new account and commit it.
+-- *** PAUSE — switch to Session B: run B-4, B-5 ***
 
--- Step A-4: Re-run the same query. In REPEATABLE READ you see the same result.
+-- Step A-4: Re-run. Snapshot is fixed — Session B's insert is not visible.
 SELECT count(*), sum(balance) AS total_balance
 FROM accounts;
 
 COMMIT;
 
--- Step A-5: Now run in READ COMMITTED (the default) and repeat.
-BEGIN; -- defaults to READ COMMITTED
+-- Step A-5: Repeat under READ COMMITTED (the default).
+BEGIN;
 
 SELECT count(*), sum(balance) AS total_balance
 FROM accounts;
 
--- *** PAUSE — switch to Session B and run B-4 again (insert another account) ***
+-- *** PAUSE — switch to Session B: run B-4 again ***
 
--- Step A-6: Re-run. In READ COMMITTED, you see Session B's new account now.
+-- Step A-6: Re-run. New snapshot per statement — Session B's insert IS visible.
 SELECT count(*), sum(balance) AS total_balance
 FROM accounts;
 
 COMMIT;
+
+-- Discussion:
+-- 1. At which isolation level does A-4 see the new account from Session B?
+-- 2. What anomaly does REPEATABLE READ prevent that READ COMMITTED allows?
+-- 3. When would you choose REPEATABLE READ over the default?
 
 
 -- =============================================================================
 -- Exercise 2.3: The lost update problem
---
--- MVCC protects against dirty reads, but it does NOT prevent lost updates
--- when two transactions read-modify-write the same row without coordination.
--- This is the classic double-spend problem in payments systems.
 -- =============================================================================
 
--- First, let's check account 1's balance.
 SELECT id, owner, balance FROM accounts WHERE id = 1;
 
--- Step A-7: Read the balance (simulating the start of a transfer).
+-- Step A-7: Read the balance. Do not update yet.
 BEGIN;
 SELECT balance FROM accounts WHERE id = 1;
--- Suppose we read 5,000.00. We intend to debit 500.
 
--- *** PAUSE — switch to Session B and run steps B-6 and B-7 ***
--- Session B reads the same balance and commits a debit of 300 first.
+-- *** PAUSE — switch to Session B: run B-6, B-7 ***
 
--- Step A-8 (after Session B commits): Now we apply OUR debit.
--- We're computing new balance from what WE read, which is now stale.
-UPDATE accounts
-SET balance = balance - 500
-WHERE id = 1;
+-- Step A-8: Apply our debit.
+-- Relative update (balance = balance - 500): arithmetic runs inside the DB,
+-- no stale read possible.
+UPDATE accounts SET balance = balance - 500 WHERE id = 1;
 COMMIT;
 
--- Step A-9: What's the final balance?
+-- Step A-9: Both debits should be reflected.
 SELECT id, balance FROM accounts WHERE id = 1;
--- Both debits were applied correctly because we used balance = balance - 500
--- (a relative update), not balance = <value we read> - 500.
---
--- The dangerous pattern is:
---   old_bal = SELECT balance ...          -- read
---   new_bal = old_bal - 500              -- compute in application
---   UPDATE accounts SET balance = new_bal -- write stale value  ← LOST UPDATE
---
--- Demonstrate the dangerous pattern:
+
+-- Dangerous pattern: application read-modify-write.
 BEGIN;
 SELECT balance AS read_value FROM accounts WHERE id = 1 \gset
--- \gset stores balance into :read_value — simulating "application read"
 
--- *** PAUSE — switch to Session B and run step B-8 ***
--- Session B concurrently debits 300, commits. Now our :read_value is stale.
+-- *** PAUSE — switch to Session B: run B-8 ***
 
--- Step A-10: Write the stale computed value — this OVERWRITES Session B's update.
+-- Step A-10: Write back a stale computed value. Session B's debit will be lost.
 UPDATE accounts SET balance = :read_value - 200 WHERE id = 1;
 COMMIT;
 
 SELECT id, balance FROM accounts WHERE id = 1;
--- The balance should have decreased by BOTH 300 (Session B) and 200 (us).
--- If the lost update happened, it only decreased by 200 — Session B's work is gone.
+-- Lost update: balance dropped by 200 only, not 200 + 300 (Session B's debit).
+
+-- Discussion:
+-- 1. Why did the relative UPDATE in A-8 preserve both debits?
+-- 2. Why did the application read-modify-write in A-10 lose Session B's work?
+-- 3. What isolation level causes the read-modify-write pattern to error
+--    instead of silently overwriting?
 
 
 -- =============================================================================
--- Exercise 2.4: SELECT FOR UPDATE — coordinating write access
---
--- SELECT FOR UPDATE takes a row-level lock, forcing concurrent writers to
--- wait rather than race. This is how you prevent lost updates without
--- moving to SERIALIZABLE isolation.
+-- Exercise 2.4: SELECT FOR UPDATE
 -- =============================================================================
 
--- Reset account 1 to a known balance first
 UPDATE accounts SET balance = 10000.00 WHERE id = 1;
 
--- Step A-11: Start a transfer using SELECT FOR UPDATE.
+-- Step A-11: Acquire a row lock before reading.
 BEGIN;
 
 SELECT id, balance FROM accounts WHERE id = 1 FOR UPDATE;
--- This acquires a row-level ExclusiveLock on account 1's tuple.
 
--- *** PAUSE — switch to Session B and run step B-9 ***
--- Session B will try to SELECT FOR UPDATE the same row. It will BLOCK.
--- While it's blocked, inspect pg_locks:
+-- *** PAUSE — switch to Session B: run B-9 (it will block) ***
 
 SELECT pg_backend_pid();
 
@@ -222,21 +182,16 @@ FROM pg_locks
 WHERE relation = 'accounts'::regclass
 ORDER BY granted DESC, pid;
 
--- Also look at who is waiting and why:
-SELECT
-    pid,
-    state,
-    wait_event_type,
-    wait_event,
-    left(query, 80) AS query
+SELECT pid, state, wait_event_type, wait_event, left(query, 80) AS query
 FROM pg_stat_activity
-WHERE state != 'idle'
-  AND pid != pg_backend_pid()
+WHERE state != 'idle' AND pid != pg_backend_pid()
 ORDER BY state;
 
--- Step A-12: Complete the transfer and commit. Session B will unblock.
+-- Step A-12: Commit. Session B unblocks and sees the post-commit balance.
 UPDATE accounts SET balance = balance - 1000 WHERE id = 1;
 COMMIT;
 
--- Session B should now proceed with the balance it sees AFTER our commit.
-
+-- Discussion:
+-- 1. What lock mode does FOR UPDATE acquire? Where did you see it in pg_locks?
+-- 2. What would happen if Session A used ROLLBACK instead of COMMIT?
+-- 3. When is SELECT FOR UPDATE the right tool vs. a plain relative UPDATE?
