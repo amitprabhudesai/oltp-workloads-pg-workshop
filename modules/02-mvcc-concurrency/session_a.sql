@@ -151,6 +151,8 @@ SELECT id, balance FROM accounts WHERE id = 1 FOR UPDATE;
 -- Session B will try to SELECT FOR UPDATE the same row. It will BLOCK.
 -- While it's blocked, inspect pg_locks:
 
+SELECT pg_backend_pid();
+
 SELECT
     pid,
     locktype,

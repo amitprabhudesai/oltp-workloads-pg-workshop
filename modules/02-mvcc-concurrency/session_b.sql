@@ -85,6 +85,8 @@ COMMIT;
 -- Try to acquire the same lock. This will BLOCK until Session A commits.
 BEGIN;
 
+SELECT pg_backend_pid();
+
 SELECT id, balance FROM accounts WHERE id = 1 FOR UPDATE;
 -- This hangs until Session A's step A-12 runs.
 -- Once unblocked, you'll see the balance AFTER Session A's debit.
