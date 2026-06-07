@@ -33,7 +33,9 @@ ORDER BY xact_start;
 -- *** Tell Session A to run step A-2 (COMMIT) ***
 
 -- Step B-3: Now re-run the SELECT. You should see Session A's committed row.
-SELECT id, status, amount
+-- Include system columns: xmin will match Session A's txid (from pg_stat_activity),
+-- and xmax = 0 because no one has deleted or updated this version yet.
+SELECT xmin, xmax, ctid, id, status, amount
 FROM transfers
 ORDER BY id DESC
 LIMIT 5;

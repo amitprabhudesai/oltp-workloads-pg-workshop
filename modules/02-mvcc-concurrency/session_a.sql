@@ -12,6 +12,64 @@ SET search_path TO rootconf, public;
 \timing on
 
 -- =============================================================================
+-- Warmup: What MVCC looks like under the hood
+--
+-- Every row version carries system columns PostgreSQL uses to decide visibility.
+-- You can read them directly — no extension or special role needed.
+-- These are the building blocks for everything in Exercises 2.1–2.4.
+-- =============================================================================
+
+-- W-1: Inspect a live row's system columns.
+--   xmin  -- txid that created (inserted) this version
+--   xmax  -- txid that deleted/updated it  (0 = still live)
+--   ctid  -- physical address: (page_number, item_offset_on_page)
+SELECT xmin, xmax, ctid, id, balance
+FROM accounts
+WHERE id = 1;
+
+-- W-2: Watch the version chain form inside a transaction.
+BEGIN;
+
+-- Before the UPDATE — note xmin, xmax, ctid.
+SELECT xmin, xmax, ctid, id, balance
+FROM accounts WHERE id = 1;
+
+UPDATE accounts SET balance = balance - 100 WHERE id = 1;
+
+-- After the UPDATE — we see the NEW version only.
+--   xmin  = our txid (we created this version)
+--   xmax  = 0       (no one has deleted it yet)
+--   ctid  = new physical slot on the page
+-- The old version (with xmax = our txid) is invisible to normal SELECT.
+SELECT xmin, xmax, ctid, id, balance
+FROM accounts WHERE id = 1;
+
+ROLLBACK;  -- undo so Exercise 2.3's starting balance is predictable
+
+-- W-3 (bonus — requires superuser): see BOTH versions simultaneously.
+-- pageinspect reads the raw heap page, bypassing visibility rules.
+-- To run this block, reconnect as postgres first: \c workshop postgres
+--
+-- CREATE EXTENSION IF NOT EXISTS pageinspect;
+-- BEGIN;
+-- UPDATE accounts SET balance = balance - 100 WHERE id = 1;
+-- SELECT
+--     lp                                           AS slot,
+--     t_xmin,
+--     t_xmax,
+--     t_ctid,
+--     (t_infomask & x'0100'::int) > 0              AS xmin_committed,
+--     (t_infomask & x'0800'::int) > 0              AS xmax_invalid
+-- FROM heap_page_items(get_raw_page('accounts', 0))
+-- WHERE lp_flags = 1       -- Normal items (skip Redirect/Dead/Unused)
+--   AND t_xmin IS NOT NULL;
+-- -- Expect two rows for account 1:
+-- --   old: t_xmax = our txid, xmin_committed = true
+-- --   new: t_xmin = our txid, t_xmax = 0
+-- ROLLBACK;
+
+
+-- =============================================================================
 -- Exercise 2.1: Snapshot isolation — readers don't block writers
 --
 -- MVCC (Multi-Version Concurrency Control) means PostgreSQL keeps multiple
