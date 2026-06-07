@@ -19,6 +19,9 @@ $PSQL -f /workspace/modules/00-setup/02_roles.sql
 echo "==> Loading seed data..."
 $PSQL -f /workspace/modules/00-setup/03_seed.sql
 
+echo "==> Loading benchmark utilities..."
+$PSQL -f /workspace/modules/90-microbench/01_procedures.sql
+
 echo ""
 cp /workspace/.devcontainer/psqlrc ~/.psqlrc
 
