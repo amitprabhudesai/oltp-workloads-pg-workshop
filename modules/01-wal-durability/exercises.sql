@@ -67,13 +67,14 @@ CHECKPOINT;
 SELECT pg_current_wal_lsn() AS lsn_after_checkpoint;
 
 INSERT INTO transfers (from_account, to_account, amount, status)
-SELECT
-    (random() * 99 + 1)::bigint,
-    (random() * 99 + 1)::bigint,
-    round((random() * 500 + 1)::numeric, 2),
-    'completed'
-FROM generate_series(1, 1000)
-WHERE (random() * 99 + 1)::bigint <> (random() * 99 + 1)::bigint;
+SELECT a1, a2, round((random() * 500 + 1)::numeric, 2), 'completed'
+FROM (
+    SELECT
+        (random() * 99 + 1)::bigint AS a1,
+        (random() * 99 + 1)::bigint AS a2
+    FROM generate_series(1, 1000)
+) t
+WHERE a1 <> a2;
 
 -- Compare wal_fpi before and after the checkpoint. Notice it jumped?
 SELECT wal_fpi, pg_size_pretty(wal_bytes::bigint) AS wal_bytes FROM pg_stat_wal;
@@ -106,44 +107,62 @@ SHOW synchronous_commit;
 --                  on a hard crash. The database STAYS CONSISTENT — no torn writes,
 --                  no partial transactions. Just a small loss of recent commits.
 
--- Benchmark: 500 single-row inserts with synchronous_commit = on
+-- Why CALL and not a DO block?
+-- A DO block is ONE transaction — it fsyncs exactly once at the end regardless
+-- of synchronous_commit. To observe per-commit sync behaviour each insert needs
+-- its own COMMIT. Only a PROCEDURE allows COMMIT inside its body.
+-- rootconf.bench_inserts(n) does exactly that: n inserts, n commits.
+
+-- We measure wal_sync COUNTS rather than wall-clock time.
+-- In a Docker container fsync is near-free (NVMe + VM buffering), so timing
+-- doesn't reveal the difference. But the sync count always does:
+--   synchronous_commit = on  → each COMMIT drives one WAL sync → wal_sync ≈ n
+--   synchronous_commit = off → WAL writer batches syncs every wal_writer_delay
+--                              (200ms default) → wal_sync stays near zero
+--                              during a short run.
+-- On real hardware the timing difference is dramatic (5–20x on spinning disks).
+
+-- Step 1: synchronous_commit = on
+-- Sleep > wal_writer_delay (200ms) so the WAL writer completes its current
+-- cycle and idles out. Both runs then start from the same quiescent state,
+-- reducing variance in the wal_sync counts.
+SELECT pg_sleep(0.3);
+SELECT wal_write, wal_sync FROM pg_stat_wal \gset before_on_
+
 SET synchronous_commit = on;
-\set start_lsn `psql -U participant -Atc "SELECT pg_current_wal_lsn()"`
+CALL rootconf.bench_inserts(500);
 
-DO $$
-DECLARE i int;
-BEGIN
-    FOR i IN 1..500 LOOP
-        INSERT INTO transfers (from_account, to_account, amount, status)
-        VALUES (
-            (random() * 99 + 1)::bigint,
-            (random() * 99 + 1)::bigint,
-            round((random() * 500 + 1)::numeric, 2),
-            'completed'
-        );
-    END LOOP;
-END;
-$$;
+SELECT
+    wal_write - :before_on_wal_write  AS wal_writes,
+    wal_sync  - :before_on_wal_sync   AS wal_syncs
+FROM pg_stat_wal;
+-- Expected: wal_writes ≈ wal_syncs ≈ 500.
+-- Each COMMIT drove its own write-and-sync cycle before returning to the client.
+-- Observed on Docker Desktop / macOS: wal_writes=501, wal_syncs=501, ~88ms.
 
--- Note the elapsed time shown by \timing, then repeat with off:
+-- Step 2: synchronous_commit = off
+SELECT pg_sleep(0.3);
+SELECT wal_write, wal_sync FROM pg_stat_wal \gset before_off_
+
 SET synchronous_commit = off;
+CALL rootconf.bench_inserts(500);
 
-DO $$
-DECLARE i int;
-BEGIN
-    FOR i IN 1..500 LOOP
-        INSERT INTO transfers (from_account, to_account, amount, status)
-        VALUES (
-            (random() * 99 + 1)::bigint,
-            (random() * 99 + 1)::bigint,
-            round((random() * 500 + 1)::numeric, 2),
-            'completed'
-        );
-    END LOOP;
-END;
-$$;
+SELECT
+    wal_write - :before_off_wal_write AS wal_writes,
+    wal_sync  - :before_off_wal_sync  AS wal_syncs
+FROM pg_stat_wal;
+-- Expected: wal_writes << 500, wal_syncs ≈ 0–3.
+-- The committing backend only appended to the in-memory WAL ring buffer and
+-- returned immediately. The WAL writer owns the flush schedule (fires every
+-- wal_writer_delay, default 200ms) — most records were still in shared memory
+-- when this SELECT ran.
+-- Observed on Docker Desktop / macOS: wal_writes=33, wal_syncs=3, ~44ms.
+--
+-- On Docker the 2x timing gap understates the real effect. On spinning disks
+-- each fsync costs ~5–10ms, so 500 x on-commits ≈ 2.5–5 s vs ~100 ms off.
+-- That 25–50x gap is what drives the use of this setting in production.
 
--- Reset for subsequent exercises
+-- Reset
 SET synchronous_commit = on;
 
 -- Discussion questions:
@@ -162,30 +181,59 @@ SET synchronous_commit = on;
 -- for both durability and performance.
 -- =============================================================================
 
--- Checkpoint stats
+-- Step 1: Force a checkpoint to establish a clean, known baseline.
+-- Without this, a timed checkpoint (checkpoint_timeout=60s) can fire mid-exercise
+-- and shrink wal_since_checkpoint unexpectedly, obscuring the story.
+CHECKPOINT;
+
 SELECT
-    checkpoints_timed                                        AS timed,
-    checkpoints_req                                          AS requested,
-    pg_size_pretty((buffers_checkpoint * 8192)::bigint)      AS checkpoint_written,
-    pg_size_pretty((buffers_clean * 8192)::bigint)           AS bgwriter_written,
-    pg_size_pretty((buffers_backend * 8192)::bigint)         AS backend_written,
-    round(checkpoint_write_time::numeric / 1000, 2)          AS checkpoint_write_s,
-    round(checkpoint_sync_time::numeric / 1000, 2)           AS checkpoint_sync_s
+    checkpoints_req     AS req,
+    buffers_checkpoint  AS chk_bufs,
+    buffers_clean       AS bgw_bufs,
+    buffers_backend     AS backend_bufs
+FROM pg_stat_bgwriter \gset before_
+
+-- Step 2: Confirm the checkpoint LSN anchor. wal_since_checkpoint should be
+-- near zero right after the CHECKPOINT above.
+SELECT * FROM rootconf.checkpoint_info();
+
+-- Step 3: Generate some dirty buffers.
+INSERT INTO transfers (from_account, to_account, amount, status)
+SELECT a1, a2, round((random() * 500 + 1)::numeric, 2), 'completed'
+FROM (
+    SELECT (random() * 99 + 1)::bigint AS a1, (random() * 99 + 1)::bigint AS a2
+    FROM generate_series(1, 5000)
+) t WHERE a1 <> a2;
+
+-- Step 4: How far has WAL advanced since the last checkpoint?
+SELECT * FROM rootconf.checkpoint_info();
+-- wal_since_checkpoint should now show several MB of unflushed heap changes.
+
+-- Step 5: Force a checkpoint and observe.
+CHECKPOINT;
+
+SELECT * FROM rootconf.checkpoint_info();
+-- wal_since_checkpoint resets to near zero: the checkpoint_lsn has advanced,
+-- so crash recovery now only needs to replay from here forward.
+
+-- Step 6: Show what happened in this exercise (delta, not lifetime totals).
+SELECT
+    checkpoints_req    - :before_req         AS checkpoints_added,
+    pg_size_pretty(((buffers_checkpoint - :before_chk_bufs)  * 8192)::bigint) AS checkpoint_written,
+    pg_size_pretty(((buffers_clean      - :before_bgw_bufs)  * 8192)::bigint) AS bgwriter_written
 FROM pg_stat_bgwriter;
 
--- buffers_backend is the important one: when it's high, backends are writing
--- dirty pages themselves because the checkpointer/bgwriter can't keep up.
--- This causes latency spikes on write-heavy workloads.
+-- Expected: checkpoints_added=1, checkpoint_written ≈ size of your INSERT,
+-- bgwriter_written=0 (bgwriter has nothing to do in a single-session container
+-- with 60s checkpoints — the checkpointer handles everything).
 
--- Force a checkpoint and observe the counter increment
-CHECKPOINT;
-SELECT checkpoints_req FROM pg_stat_bgwriter;
-
--- Key insight: after a checkpoint, PostgreSQL only needs to replay WAL from
--- that checkpoint LSN forward to recover from a crash.
--- The checkpoint_lsn is the "durability anchor."
--- pg_control_checkpoint() requires pg_monitor (superuser-level).
--- We expose it via a SECURITY DEFINER wrapper so participant can call it.
-SELECT * FROM rootconf.checkpoint_info();
--- wal_since_checkpoint grows as you write; CHECKPOINT resets it to near zero.
+-- NOTE on buffers_backend (not shown above):
+-- In this container, log_autovacuum_min_duration=0 makes autovacuum very
+-- aggressive. Its buffer writes are attributed to buffers_backend, making
+-- the metric noisy for our purposes.
+-- In production, buffers_backend > 0 is the signal that matters:
+-- it means backends had to write dirty pages themselves (buffer eviction
+-- under pressure) rather than the bgwriter staying ahead.
+-- Sustained buffers_backend > 0 → tune bgwriter_lru_maxpages/bgwriter_delay
+-- or increase shared_buffers.
 
