@@ -1,8 +1,7 @@
 -- 03_checkpoint_fpi:
 --   CHECKPOINT advances checkpoint_lsn and its counter.
---   First write after CHECKPOINT carries a full-page image (FPI);
---   subsequent writes in the same cycle are delta-only.
---   FPI is detected by ratio: first_delta > second_delta * 5.
+--   First write after CHECKPOINT carries a full-page image (fpi_length > 0);
+--   subsequent writes in the same cycle are delta-only (fpi_length = 0).
 SET search_path TO rootconf, public;
 
 DO $$ BEGIN
@@ -21,21 +20,26 @@ CHECKPOINT;
 SELECT (SELECT checkpoints_req + checkpoints_timed FROM pg_stat_bgwriter)
         > :snap AS checkpoint_count_incremented;
 
--- 3.3  FPI contrast: first write >> second write
--- page_lsn (INSERT) < redo_ptr after CHECKPOINT → FPI on first touch.
--- Ratio >> 5×; absolute threshold would be brittle under wal_compression.
+-- 3.3  First write after CHECKPOINT carries an FPI (fpi_length > 0)
 INSERT INTO accounts (owner, balance) VALUES ('_regress_fpi_test', 100.00);
 CHECKPOINT;
 
 SELECT pg_current_wal_lsn() AS before_lsn \gset
 UPDATE accounts SET balance = 200.00 WHERE owner = '_regress_fpi_test';
-SELECT pg_wal_lsn_diff(pg_current_wal_lsn(), :'before_lsn') AS first_delta \gset
+SELECT pg_current_wal_lsn() AS after_lsn \gset
 
+SELECT sum(fpi_length) > 0 AS first_write_has_fpi
+FROM pg_get_wal_records_info(:'before_lsn', :'after_lsn')
+WHERE resource_manager = 'Heap';
+
+-- 3.4  Second write to the same page is delta-only (fpi_length = 0)
 SELECT pg_current_wal_lsn() AS before_lsn \gset
 UPDATE accounts SET balance = 300.00 WHERE owner = '_regress_fpi_test';
-SELECT pg_wal_lsn_diff(pg_current_wal_lsn(), :'before_lsn') AS second_delta \gset
+SELECT pg_current_wal_lsn() AS after_lsn \gset
 
-SELECT :first_delta > :second_delta * 5 AS fpi_write_larger_than_delta;
+SELECT sum(fpi_length) = 0 AS second_write_no_fpi
+FROM pg_get_wal_records_info(:'before_lsn', :'after_lsn')
+WHERE resource_manager = 'Heap';
 
 DO $$ BEGIN
     DELETE FROM accounts WHERE owner = '_regress_fpi_test';
