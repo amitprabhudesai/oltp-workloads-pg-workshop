@@ -1,14 +1,14 @@
- insert_advances_lsn
+ insert_writes_heap_record
 ---------------------------------------------------------------------
  t
 (1 row)
 
- update_advances_lsn
+ update_writes_heap_record
 ---------------------------------------------------------------------
  t
 (1 row)
 
- delete_advances_lsn
+ delete_writes_heap_record
 ---------------------------------------------------------------------
  t
 (1 row)

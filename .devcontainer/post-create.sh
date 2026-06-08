@@ -10,6 +10,9 @@ until pg_isready -h postgres -U workshop -d workshop; do
   sleep 1
 done
 
+echo "==> Installing extensions..."
+$PSQL -c "CREATE EXTENSION IF NOT EXISTS pg_walinspect;"
+
 echo "==> Loading schema..."
 $PSQL -f /workspace/modules/00-setup/01_schema.sql
 
