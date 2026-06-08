@@ -6,3 +6,6 @@
 .vscode/settings.json
 *.swp
 *~
+
+# Test runner output (generated; not versioned)
+tests/regress/out/
