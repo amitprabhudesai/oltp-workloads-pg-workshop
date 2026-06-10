@@ -721,6 +721,61 @@ Larger \texttt{max\_wal\_size} = better throughput, longer recovery.}
 \end{frame}
 
 % -----------------------------------------------------------------------------
+% Slide: Solution approach 1 — locking
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{Approach 1: Locking}
+
+\begin{lstlisting}[style=ascii]
+  T1: transfer Arun -> Babita (300)    T2: audit
+  ----------------------------------   -------------------------
+  BEGIN
+  UPDATE Arun   1000 -> 700
+  UPDATE Babita  500 -> 800
+  (holds locks on both rows)           BEGIN
+                                       SELECT Arun ... BLOCKED
+                                           |
+                                           | waiting for T1
+                                           |
+  COMMIT  (releases locks) ----------->   |
+                                       SELECT Arun   --> 700
+                                       SELECT Babita --> 800
+                                       SELECT Chirag --> 1500
+                                       -------------------------
+                                       total = 3000  (correct)
+\end{lstlisting}
+
+{\small Correct --- but T2 sat idle while T1 worked.
+At high concurrency, that wait queue becomes the bottleneck.}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: Solution approach 2 — MVCC
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{Approach 2: MVCC}
+
+\begin{lstlisting}[style=ascii]
+  T1: transfer Arun -> Babita (300)    T2: audit
+  ----------------------------------   -------------------------
+  BEGIN
+  UPDATE Arun   1000 -> 700            BEGIN  <-- snapshot here
+  UPDATE Babita  500 -> 800
+                                       SELECT Arun   --> 1000 (*)
+  COMMIT
+                                       SELECT Babita -->  500 (*)
+                                       SELECT Chirag --> 1500
+                                       -------------------------
+                                       total = 3000  (correct)
+
+  (*) T2 reads the row version visible at its snapshot time.
+      T1 and T2 never blocked each other.
+\end{lstlisting}
+
+{\small How does PostgreSQL know which version to show T2? \textrightarrow\ next.}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
 % Slide: MVCC motivation
 % -----------------------------------------------------------------------------
 \begin{frame}{MVCC: Multi-Version Concurrency Control}
