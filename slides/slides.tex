@@ -468,44 +468,32 @@ Larger \texttt{max\_wal\_size} = better throughput, longer recovery.}
 % Slide: Full-Page Writes — Backup Blocks
 % -----------------------------------------------------------------------------
 \begin{frame}[fragile]{Full-Page Writes: Backup Blocks}
-
-  \begin{columns}[T]
-    \column{0.44\textwidth}
-    \textbf{The fix: backup blocks (full-page images)}
-    \begin{itemize}\small
-      \item On the \textit{first write to any page after each
-            checkpoint}, PostgreSQL embeds the entire \textbf{8\,kB
-            page} in the WAL record
-      \item Subsequent writes to the same page before the next
-            checkpoint are delta-only
-      \item Recovery overwrites the corrupted page wholesale from
-            the backup block, then replays later deltas cleanly
-    \end{itemize}
-    {\small \texttt{full\_page\_writes = on} by default.
-    Overhead is visible in \texttt{pg\_stat\_wal.wal\_fpi}.}
-
-    \column{0.54\textwidth}
 \begin{lstlisting}[style=ascii]
-  --[CKPT]------+------------+--> WAL
-                |            |
-           1st mod      2nd mod
-             of page     of page
-                |            |
-                v            v
-           [FPI: full    [delta:
-            8 kB page]    small]
+  --[CKPT]----------+------------------+----------> WAL
+                    |                  |
+               1st write           2nd write
+               to page P           to page P
+                    |                  |
+                    v                  v
+             +------------+      +----------+
+             | FPI        |      | delta    |  WAL record
+             | full 8 kB  |      | ~100 B   |
+             | page image |      | (changed |
+             |            |      |  bytes)  |
+             +------------+      +----------+
 
-  OS crash while writing dirty page:
-  +----------+
-  | TABLE_A  |  torn: partial write
-  | ????     |  --> corrupted on disk
-  +----------+
+  ** OS crash ** while bgwriter flushes page P to disk:
 
-  Recovery:
-    FPI  -> overwrites torn page (safe)
-    delta -> replays cleanly on good page
+  data file                       pg_wal/ (survived)
+  +--------------------+          +----------------+
+  | page P             |          | FPI  @ LSN_1   |
+  | [????|good data]   |          | delta@ LSN_2   |
+  |  ^^^^ torn write   |          +----------------+
+  +--------------------+
+                                  Recovery:
+                                  FPI  --> overwrite page P wholesale
+                                  delta--> replay cleanly on good page
 \end{lstlisting}
-  \end{columns}
 \end{frame}
 
 % -----------------------------------------------------------------------------
@@ -519,62 +507,6 @@ Larger \texttt{max\_wal\_size} = better throughput, longer recovery.}
     This guarantees recovery even from a torn page.\\[0.4em]
     There are no free lunches.  What does this cost?
   \end{block}
-
-\end{frame}
-
-% -----------------------------------------------------------------------------
-% Slide: Full-Page Images — cost in practice (ASCII + observe + amortization)
-% -----------------------------------------------------------------------------
-\begin{frame}[fragile]{Full-Page Images: The Cost in Practice}
-
-  \begin{columns}[T]
-    \column{0.44\textwidth}
-    \begin{itemize}\small
-      \item \textbf{Observe:} \texttt{wal\_fpi} in \texttt{pg\_stat\_wal}
-            counts FPI records --- it spikes right after each checkpoint;
-            that is expected
-      \item \textbf{Amortization:} each page pays the FPI cost
-            \textit{once} per checkpoint interval; every subsequent
-            write to the same page is a small delta until the
-            next checkpoint resets the clock
-    \end{itemize}
-
-    \column{0.54\textwidth}
-\begin{lstlisting}[style=ascii]
--- writes to the same page over time:
-
-CKPT          CKPT
- |             |
- +--w1--w2--w3-+--w1--w2--w3-->
-    |   |   |     |   |   |
-  8kB 100B 100B 8kB 100B 100B
-  FPI  d    d   FPI  d    d
-
-FPI = full 8kB page in WAL record
-d   = delta (only the changed bytes)
-
--- each page pays FPI cost once per
--- checkpoint interval, not per write
-\end{lstlisting}
-  \end{columns}
-
-\end{frame}
-
-% -----------------------------------------------------------------------------
-% Slide: Full-Page Images — managing the overhead (production tips)
-% -----------------------------------------------------------------------------
-\begin{frame}{Full-Page Images: Managing the Overhead}
-
-  \begin{itemize}
-    \item \textbf{\texttt{wal\_compression = lz4}} (or \texttt{zstd})
-          compresses the FPI payload in-place --- meaningfully reduces WAL
-          volume on compressible pages with little CPU overhead; safe to
-          enable with no schema changes
-    \item \textit{Never} disable \texttt{full\_page\_writes} unless your
-          filesystem or storage layer guarantees atomic 8\,kB writes ---
-          almost none do in practice, and a torn page with only delta
-          records in WAL is unrecoverable
-  \end{itemize}
 
 \end{frame}
 
