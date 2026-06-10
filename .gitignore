@@ -6,3 +6,14 @@
 .vscode/settings.json
 *.swp
 *~
+
+# LaTeX build artefacts
+slides/*.aux
+slides/*.log
+slides/*.nav
+slides/*.out
+slides/*.snm
+slides/*.toc
+slides/*.vrb
+slides/*.fls
+slides/*.fdb_latexmk
