@@ -203,9 +203,9 @@
     \column{0.48\textwidth}
     \textbf{\faDatabase\enspace Module 2 --- MVCC \& Concurrency}
     \begin{itemize}\small
-      \item Multi-version heap pages
-      \item Snapshot isolation in practice
-      \item Lock contention \& row-level locking
+      \item Isolation anomalies \& the MVCC model
+      \item Snapshot isolation: xmin, xmax, visibility
+      \item Lost updates \& \texttt{SELECT FOR UPDATE}
       \item VACUUM \& bloat
     \end{itemize}
   \end{columns}
@@ -1185,7 +1185,7 @@ Without VACUUM:
 \section{Takeaways}
 % =============================================================================
 
-\begin{frame}{Key Takeaways}
+\begin{frame}{Key Takeaways: WAL \& Durability}
 
   \begin{block}{WAL \& Durability}
     \begin{itemize}\small
@@ -1200,10 +1200,14 @@ Without VACUUM:
     \end{itemize}
   \end{block}
 
-  \vspace{0.2em}
+\end{frame}
+
+\begin{frame}{Key Takeaways: MVCC \& Concurrency}
+
   \begin{block}{MVCC \& Concurrency}
     \begin{itemize}\small
-      \item MVCC keeps old row versions on the heap; readers never block writers
+      \item MVCC prevents isolation anomalies without locking ---
+            each transaction sees a consistent snapshot; readers never block writers
       \item Isolation level controls snapshot timing ---
             READ COMMITTED re-snapshots per statement; REPEATABLE READ holds one
       \item Lost updates are \textit{not} prevented by MVCC: use relative
@@ -1212,6 +1216,7 @@ Without VACUUM:
             reclaimed by VACUUM --- left unchecked, this becomes table bloat
     \end{itemize}
   \end{block}
+
 \end{frame}
 
 % -----------------------------------------------------------------------------
