@@ -961,37 +961,30 @@ t_xmin COMMITTED?
 \end{frame}
 
 % -----------------------------------------------------------------------------
-% Slide: Lost Update detail
+% Slide: Lost Update — Arun/Babita/Chirag example
 % -----------------------------------------------------------------------------
 \begin{frame}[fragile]{The Lost Update Problem}
 
 \begin{lstlisting}[style=ascii]
-Session A                          Session B
----------                          ---------
-BEGIN;
-SELECT balance --> 5000
-                                   BEGIN;
-                                   SELECT balance --> 5000
-                                   UPDATE SET balance = 4700  -- debit 300
-                                   COMMIT;
-UPDATE SET balance = 4500  -- debit 500 from STALE read
-COMMIT;
-
-Final balance: 4500  (Session B's debit is GONE)
+  Initial:  Arun=1000  Babita=500  Chirag=1500  (total = 3000)
+  ---------------------------------------------------------------
+  T1: Arun -> Babita (300)          T2: Chirag -> Arun (200)
+  --------------------------------  -------------------------------
+  BEGIN
+  SELECT Arun --> 1000
+                                    BEGIN
+                                    SELECT Arun --> 1000   (*)
+  new_balance = 1000 - 300 = 700
+  UPDATE Arun SET balance = 700
+  COMMIT
+                                    new_balance = 1000 + 200 = 1200
+                                    UPDATE Arun SET balance = 1200
+                                    COMMIT
+  ---------------------------------------------------------------
+  (*) T2 read Arun before T1 committed.  Computed from stale data.
+  Final:    Arun = 1200   Expected: Arun = 900
+  T1's debit of 300 is gone.
 \end{lstlisting}
-
-  \vspace{0.4em}
-  \begin{columns}[T]
-    \column{0.48\textwidth}
-    \textbf{Dangerous:} application read-modify-write\\
-    {\small Read value, compute new value in app, write it back.
-    The write silently overwrites concurrent updates.}
-
-    \column{0.48\textwidth}
-    \textbf{Safe:} relative \texttt{UPDATE}\\
-    {\small \texttt{SET balance = balance - 500}\\
-    pushes arithmetic into the database --- atomic, no stale read.}
-  \end{columns}
 
 \end{frame}
 
