@@ -396,6 +396,77 @@ exec_simple_query()                         [postgres.c]
 \end{frame}
 
 % -----------------------------------------------------------------------------
+% Slide: Checkpoints motivation
+% -----------------------------------------------------------------------------
+\begin{frame}{Checkpoints}
+
+  \begin{block}{}
+    Recovery replays WAL from some starting point.
+    If that starting point is the very beginning of WAL history,
+    recovery time is unbounded.\\[0.4em]
+    How does the database keep restart time predictable?
+  \end{block}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: Checkpoints detail
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{Checkpoints: Bounding Recovery Time}
+  \begin{columns}[T]
+    \column{0.54\textwidth}
+    \textbf{What a checkpoint does:}
+    \begin{enumerate}\small
+      \item Flush all dirty pages from shared buffers to data files
+      \item Write a checkpoint WAL record with the \texttt{redo\_lsn}
+    \end{enumerate}
+    \textbf{On crash:} replay only WAL \textit{after} \texttt{redo\_lsn}.
+
+    \vspace{0.4em}
+    \textbf{Triggered by:}
+    \begin{itemize}\small
+      \item \texttt{checkpoint\_timeout} (default 5\,min)
+      \item \texttt{max\_wal\_size} exceeded
+      \item Explicit \texttt{CHECKPOINT} command
+    \end{itemize}
+
+    \vspace{0.3em}
+    {\small Larger \texttt{max\_wal\_size} \textrightarrow\
+    more WAL between checkpoints \textrightarrow\
+    better write throughput, \textit{but} longer crash recovery ---
+    a fundamental production trade-off.}
+
+    \column{0.44\textwidth}
+\begin{lstlisting}[style=ascii]
+  redo_lsn          current LSN
+     |                    |
+     v                    v
+-----+--------------------+--> WAL
+     |<-- replay on crash-|
+     |  (wal_since_chkpt) |
+
+dirty pages already written
+to data files at checkpoint
+\end{lstlisting}
+  \end{columns}
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: Exercise 1.3 cue
+% -----------------------------------------------------------------------------
+\begin{frame}{Exercise 1.3 --- Checkpoints \& Write Path}
+
+  \begin{block}{}
+    \faTerminal\enspace\texttt{modules/01-wal-durability/exercises.sql}\\[0.5em]
+    Run an explicit \texttt{CHECKPOINT}, insert rows, watch the recovery
+    horizon grow in \texttt{pg\_stat\_wal}.\\[0.3em]
+    Checkpoint again; check \texttt{pg\_stat\_bgwriter} for
+    \texttt{buffers\_backend} --- the write-pressure signal.
+  \end{block}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
 % Slide: Full-Page Writes
 % -----------------------------------------------------------------------------
 \begin{frame}{Full-Page Writes}
@@ -451,6 +522,76 @@ exec_simple_query()                         [postgres.c]
     delta -> replays cleanly on good page
 \end{lstlisting}
   \end{columns}
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: Full-Page Images motivation
+% -----------------------------------------------------------------------------
+\begin{frame}{Full-Page Images: The Checkpoint Tax}
+
+  \begin{block}{}
+    After each checkpoint, the first write to any dirty page embeds
+    the \textit{entire} 8\,kB page in the WAL record --- not just the delta.
+    This guarantees recovery even from a torn page.\\[0.4em]
+    There are no free lunches.  What does this cost?
+  \end{block}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: Full-Page Images — cost in practice (ASCII + observe + amortization)
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{Full-Page Images: The Cost in Practice}
+
+  \begin{columns}[T]
+    \column{0.44\textwidth}
+    \begin{itemize}\small
+      \item \textbf{Observe:} \texttt{wal\_fpi} in \texttt{pg\_stat\_wal}
+            counts FPI records --- it spikes right after each checkpoint;
+            that is expected
+      \item \textbf{Amortization:} each page pays the FPI cost
+            \textit{once} per checkpoint interval; every subsequent
+            write to the same page is a small delta until the
+            next checkpoint resets the clock
+    \end{itemize}
+
+    \column{0.54\textwidth}
+\begin{lstlisting}[style=ascii]
+-- writes to the same page over time:
+
+CKPT          CKPT
+ |             |
+ +--w1--w2--w3-+--w1--w2--w3-->
+    |   |   |     |   |   |
+  8kB 100B 100B 8kB 100B 100B
+  FPI  d    d   FPI  d    d
+
+FPI = full 8kB page in WAL record
+d   = delta (only the changed bytes)
+
+-- each page pays FPI cost once per
+-- checkpoint interval, not per write
+\end{lstlisting}
+  \end{columns}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: Full-Page Images — managing the overhead (production tips)
+% -----------------------------------------------------------------------------
+\begin{frame}{Full-Page Images: Managing the Overhead}
+
+  \begin{itemize}
+    \item \textbf{\texttt{wal\_compression = lz4}} (or \texttt{zstd})
+          compresses the FPI payload in-place --- meaningfully reduces WAL
+          volume on compressible pages with little CPU overhead; safe to
+          enable with no schema changes
+    \item \textit{Never} disable \texttt{full\_page\_writes} unless your
+          filesystem or storage layer guarantees atomic 8\,kB writes ---
+          almost none do in practice, and a torn page with only delta
+          records in WAL is unrecoverable
+  \end{itemize}
+
 \end{frame}
 
 % -----------------------------------------------------------------------------
@@ -567,149 +708,6 @@ exec_simple_query()                         [postgres.c]
     in \texttt{pg\_stat\_wal}.\\[0.3em]
     The sync \textit{count} is the signal --- not the wall-clock time.
   \end{block}
-
-\end{frame}
-
-% -----------------------------------------------------------------------------
-% Slide: Checkpoints motivation
-% -----------------------------------------------------------------------------
-\begin{frame}{Checkpoints}
-
-  \begin{block}{}
-    Recovery replays WAL from some starting point.
-    If that starting point is the very beginning of WAL history,
-    recovery time is unbounded.\\[0.4em]
-    How does the database keep restart time predictable?
-  \end{block}
-
-\end{frame}
-
-% -----------------------------------------------------------------------------
-% Slide: Checkpoints detail
-% -----------------------------------------------------------------------------
-\begin{frame}[fragile]{Checkpoints: Bounding Recovery Time}
-  \begin{columns}[T]
-    \column{0.54\textwidth}
-    \textbf{What a checkpoint does:}
-    \begin{enumerate}\small
-      \item Flush all dirty pages from shared buffers to data files
-      \item Write a checkpoint WAL record with the \texttt{redo\_lsn}
-    \end{enumerate}
-    \textbf{On crash:} replay only WAL \textit{after} \texttt{redo\_lsn}.
-
-    \vspace{0.4em}
-    \textbf{Triggered by:}
-    \begin{itemize}\small
-      \item \texttt{checkpoint\_timeout} (default 5\,min)
-      \item \texttt{max\_wal\_size} exceeded
-      \item Explicit \texttt{CHECKPOINT} command
-    \end{itemize}
-
-    \vspace{0.3em}
-    {\small Larger \texttt{max\_wal\_size} \textrightarrow\
-    more WAL between checkpoints \textrightarrow\
-    better write throughput, \textit{but} longer crash recovery ---
-    a fundamental production trade-off.}
-
-    \column{0.44\textwidth}
-\begin{lstlisting}[style=ascii]
-  redo_lsn          current LSN
-     |                    |
-     v                    v
------+--------------------+--> WAL
-     |<-- replay on crash-|
-     |  (wal_since_chkpt) |
-
-dirty pages already written
-to data files at checkpoint
-\end{lstlisting}
-  \end{columns}
-\end{frame}
-
-% -----------------------------------------------------------------------------
-% Slide: Exercise 1.3 cue
-% -----------------------------------------------------------------------------
-\begin{frame}{Exercise 1.3 --- Checkpoints \& Write Path}
-
-  \begin{block}{}
-    \faTerminal\enspace\texttt{modules/01-wal-durability/exercises.sql}\\[0.5em]
-    Run an explicit \texttt{CHECKPOINT}, insert rows, watch the recovery
-    horizon grow in \texttt{pg\_stat\_wal}.\\[0.3em]
-    Checkpoint again; check \texttt{pg\_stat\_bgwriter} for
-    \texttt{buffers\_backend} --- the write-pressure signal.
-  \end{block}
-
-\end{frame}
-
-% -----------------------------------------------------------------------------
-% Slide: Full-Page Images motivation
-% -----------------------------------------------------------------------------
-\begin{frame}{Full-Page Images: The Checkpoint Tax}
-
-  \begin{block}{}
-    After each checkpoint, the first write to any dirty page embeds
-    the \textit{entire} 8\,kB page in the WAL record --- not just the delta.
-    This guarantees recovery even from a torn page.\\[0.4em]
-    There are no free lunches.  What does this cost?
-  \end{block}
-
-\end{frame}
-
-% -----------------------------------------------------------------------------
-% Slide: Full-Page Images — cost in practice (ASCII + observe + amortization)
-% -----------------------------------------------------------------------------
-\begin{frame}[fragile]{Full-Page Images: The Cost in Practice}
-
-  \begin{columns}[T]
-    \column{0.44\textwidth}
-    \begin{itemize}\small
-      \item \textbf{Observe:} \texttt{wal\_fpi} in \texttt{pg\_stat\_wal}
-            counts FPI records --- it spikes right after each checkpoint;
-            that is expected
-      \item \textbf{Amortization:} each page pays the FPI cost
-            \textit{once} per checkpoint interval; every subsequent
-            write to the same page is a small delta until the
-            next checkpoint resets the clock
-    \end{itemize}
-
-    \column{0.54\textwidth}
-\begin{lstlisting}[style=ascii]
-WAL bytes per write (same page):
-
- 8kB |##         ##
-     |##         ##
-     |##         ##
-~100B|##|#||#|   ##|#||#|
-     +--+-++--+--+--+-++-+->
-      1  2  3  ...  1  2  3
-     CKPT            CKPT
-      ^                ^
-    FPI              FPI
-    wal_fpi++        wal_fpi++
-
-SELECT wal_fpi, wal_write
-FROM pg_stat_wal;
--- wal_fpi jumps after CHECKPOINT
-\end{lstlisting}
-  \end{columns}
-
-\end{frame}
-
-% -----------------------------------------------------------------------------
-% Slide: Full-Page Images — managing the overhead (production tips)
-% -----------------------------------------------------------------------------
-\begin{frame}{Full-Page Images: Managing the Overhead}
-
-  \begin{itemize}
-    \item \textbf{\texttt{wal\_compression = lz4}} (or \texttt{zstd})
-          compresses the FPI payload in-place --- meaningfully reduces WAL
-          volume on compressible pages with little CPU overhead; safe to
-          enable with no schema changes
-    \item \textit{Never} disable \texttt{full\_page\_writes} unless your
-          filesystem or storage layer guarantees atomic 8\,kB writes ---
-          almost none do in practice, and a torn page with only delta
-          records in WAL is unrecoverable
-  \end{itemize}
 
 \end{frame}
 
