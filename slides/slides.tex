@@ -317,6 +317,40 @@
 \end{frame}
 
 % -----------------------------------------------------------------------------
+% Slide: exec_simple_query() — WAL write path (also Appendix A6)
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{\texttt{exec\_simple\_query()}: WAL Write Path}
+
+\begin{lstlisting}[style=ascii]
+exec_simple_query()                         [postgres.c]
+  |
+  +-- (1) ExtendCLOG()                      [clog.c]
+  |        mark txid IN_PROGRESS in CLOG
+  |
+  +-- (2) heap_insert()                     [heapam.c]
+  |        insert tuple into shared buffer page
+  |   |
+  |   +-- (3) XLogInsert()                  [xloginsert.c]
+  |            write Heap/INSERT record to WAL buffer
+  |            update page pd_lsn := LSN_1
+  |
+  +-- (4) finish_xact_command()             [postgres.c]
+      |    commit action
+      |
+      +-- (4a) XLogInsert()                 [xloginsert.c]
+      |         write Commit record to WAL buffer (LSN_2)
+      |
+      +-- (5) XLogWrite()                   [xlog.c]
+      |        flush WAL buffer -> WAL segment file
+      |        (fsync / fdatasync / O_DSYNC per wal_sync_method)
+      |
+      +-- (6) TransactionIdCommitTree()     [transam.c]
+               mark txid COMMITTED in CLOG
+\end{lstlisting}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
 % Slide: Database Recovery Using WAL
 % -----------------------------------------------------------------------------
 \begin{frame}[fragile]{Database Recovery Using WAL}
