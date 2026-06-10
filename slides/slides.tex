@@ -230,7 +230,7 @@
 
   \begin{block}{}
     A \texttt{COMMIT} returns to the client.  The modified pages sit
-    in shared buffers --- in RAM.\\[0.4em]
+    in shared buffers\footnote{\url{https://www.postgresql.org/docs/16/runtime-config-resource.html\#GUC-SHARED-BUFFERS}} --- in RAM.\\[0.4em]
     What happens if the server crashes before those pages reach disk?
   \end{block}
 
