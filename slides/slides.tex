@@ -690,6 +690,37 @@ Larger \texttt{max\_wal\_size} = better throughput, longer recovery.}
 % =============================================================================
 
 % -----------------------------------------------------------------------------
+% Slide: Isolation motivation — bank transfer anomaly
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{The Isolation Problem}
+
+\begin{lstlisting}[style=ascii]
+  Initial:  Arun=1000  Babita=500  Chirag=1500  (total = 3000)
+  ----------------------------------------------------------------
+
+  T1: transfer Arun -> Babita (300)    T2: audit (read all balances)
+  ----------------------------------   ----------------------------
+  BEGIN
+  UPDATE Arun   1000 -> 700
+  UPDATE Babita  500 -> 800
+                                       BEGIN
+                                       SELECT Arun   --> 1000 (*)
+  COMMIT <---- commits here ----------+
+                                       SELECT Babita -->  800 (**)
+                                       SELECT Chirag --> 1500
+                                       -------------------------
+                                       total = 3300  (?!)
+  ----------------------------------------------------------------
+  (*) T1 not yet committed: T2 sees Arun = 1000
+  (**) T1 already committed: T2 now sees Babita = 800
+
+  T2 observed both the old Arun and the new Babita.
+  300 appeared out of thin air.
+\end{lstlisting}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
 % Slide: MVCC motivation
 % -----------------------------------------------------------------------------
 \begin{frame}{MVCC: Multi-Version Concurrency Control}
