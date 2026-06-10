@@ -1182,50 +1182,6 @@ Without VACUUM:
 \end{frame}
 
 % =============================================================================
-\section{Production Numbers}
-% =============================================================================
-
-\begin{frame}{\texttt{synchronous\_commit} on Real Hardware}
-
-  {\small Azure PostgreSQL Flexible Server \textbullet\
-  4\,vCPU, 16\,GB RAM \textbullet\
-  500\,GB Premium SSDv2 \textbullet\
-  \texttt{bench\_inserts(500 rows)}}
-
-  \vspace{0.4em}
-  \begin{tabularx}{\textwidth}{X r r}
-    \toprule
-    & \textbf{\texttt{on}} & \textbf{\texttt{off}} \\
-    \midrule
-    Wall time           & 950\,ms & 98\,ms \\
-    \texttt{wal\_writes} & 504     & 33     \\
-    \texttt{wal\_syncs}  & 504     & 5      \\
-    \bottomrule
-  \end{tabularx}
-
-  \vspace{0.4em}
-  \begin{columns}[T]
-    \column{0.48\textwidth}
-    \begin{itemize}\small
-      \item \textbf{9.7$\times$ faster} with \texttt{off} ---
-            on NVMe-class storage
-      \item Per-commit fsync dominates latency,
-            not I/O bandwidth
-    \end{itemize}
-
-    \column{0.48\textwidth}
-    \begin{itemize}\small
-      \item Group commit: 500 commits $\to$ 33 writes,
-            5 syncs
-      \item \texttt{wal\_syncs} 504 $\to$ 5
-            (${\approx}100{\times}$) ---
-            the sync count is the signal
-    \end{itemize}
-  \end{columns}
-
-\end{frame}
-
-% =============================================================================
 \section{Takeaways}
 % =============================================================================
 
