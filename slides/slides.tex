@@ -1004,43 +1004,59 @@ t_xmin COMMITTED?
 \end{frame}
 
 % -----------------------------------------------------------------------------
-% Slide: SELECT FOR UPDATE detail
+% Slide: SELECT FOR UPDATE — ASCII art (Arun example)
 % -----------------------------------------------------------------------------
 \begin{frame}[fragile]{\texttt{SELECT FOR UPDATE}}
 
-  \begin{columns}[T]
-    \column{0.50\textwidth}
-    \texttt{SELECT \ldots\ FOR UPDATE} acquires a row-level
-    \textbf{ExclusiveLock} before the application reads the value.
-    A concurrent session attempting the same lock \textbf{blocks}
-    until the first transaction commits or rolls back.
-
-    \vspace{0.5em}
-    \textit{First-updater-win}: at REPEATABLE READ, the waiting
-    session aborts with a serialization error rather than silently
-    overwriting.  The application must retry.
-
-    \column{0.48\textwidth}
 \begin{lstlisting}[style=ascii]
-Session A              Session B
----------              ---------
-BEGIN;
-SELECT ... FOR UPDATE
---> ExclusiveLock held
-                       BEGIN;
-                       SELECT ... FOR UPDATE
-                       --> BLOCKS
-UPDATE ...
-COMMIT;
---> lock released
-                       --> unblocks,
-                           sees post-commit value
-                       UPDATE ...
-                       COMMIT;
+  Initial:  Arun=1000  Babita=500  Chirag=1500
+  ---------------------------------------------------------------
+  T1: Arun -> Babita (300)          T2: Chirag -> Arun (200)
+  --------------------------------  ------------------------------
+  BEGIN
+  SELECT Arun FOR UPDATE            BEGIN
+  --> ExclusiveLock acquired        SELECT Arun FOR UPDATE
+  --> Arun = 1000                   --> BLOCKS  (lock held by T1)
+  new_balance = 1000 - 300 = 700         |
+  UPDATE Arun SET balance = 700          |
+  COMMIT  --> lock released              |
+                                    --> unblocks
+                                    --> Arun = 700   (*)
+                                    new_balance = 700 + 200 = 900
+                                    UPDATE Arun SET balance = 900
+                                    COMMIT
+  ---------------------------------------------------------------
+  (*) T2 re-reads the post-commit value.  No stale data.
+  Final:    Arun = 900   Expected: Arun = 900   OK
 \end{lstlisting}
-    {\small Inspect with \texttt{pg\_locks} and
-    \texttt{pg\_blocking\_pids()} in the exercises.}
-  \end{columns}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: SELECT FOR UPDATE — mechanics
+% -----------------------------------------------------------------------------
+\begin{frame}{\texttt{SELECT FOR UPDATE}: How It Works}
+
+  \begin{block}{Row-level ExclusiveLock}
+    \texttt{SELECT \ldots\ FOR UPDATE} acquires a row-level
+    \textbf{ExclusiveLock} \emph{before} returning the value to the
+    application.  A concurrent session attempting the same lock
+    blocks until the holder commits or rolls back.
+  \end{block}
+
+  \vspace{0.6em}
+
+  \begin{block}{REPEATABLE READ: first-updater-wins}
+    Under \texttt{REPEATABLE READ}, the waiting session does
+    \emph{not} silently overwrite.  On unblock it detects the
+    concurrent update and aborts with a serialization error.
+    The application must catch and retry.
+  \end{block}
+
+  \vspace{0.4em}
+  {\small Inspect live locks with \texttt{pg\_locks} and
+  \texttt{pg\_blocking\_pids()} --- Exercise 2.4.}
+
 \end{frame}
 
 % -----------------------------------------------------------------------------
