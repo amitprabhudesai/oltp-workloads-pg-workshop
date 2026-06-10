@@ -795,22 +795,37 @@ At high concurrency, that wait queue becomes the bottleneck.}
 \begin{frame}[fragile]{MVCC: The Core Idea}
 
 \begin{lstlisting}[style=ascii]
-heap page after UPDATE (txid 200):
+  accounts heap page, after T1 (transfer) commits:
 
-  tuple_1: xmin=199  xmax=200  name='Jekyll'  <- dead (updated)
-  tuple_2: xmin=200  xmax=0    name='Hyde'    <- live
+  +--------------------------------------------------+
+  | tuple_1: xmin=T0  xmax=T1  Arun  balance=1000   | <- old
+  | tuple_2: xmin=T1  xmax=0   Arun  balance= 700   | <- live
+  +--------------------------------------------------+
+  T0 = txid that originally set Arun's balance to 1000
 
-Both versions sit on the same page until VACUUM reclaims the dead one.
-A reader with a snapshot taken before txid 200 sees 'Jekyll'.
-A reader after sees 'Hyde'.  Neither blocks the other.
+  T2 snapshot taken before T1 committed:
+    reads tuple_1 --> Arun = 1000
+
+  T3 snapshot taken after T1 committed:
+    reads tuple_2 --> Arun = 700
+
+  Both reads served from the same page.
+  Neither T2 nor T3 blocked T1.
 \end{lstlisting}
 
-  \vspace{0.5em}
-  \textbf{Readers never block writers.  Writers never block readers.}
+\end{frame}
 
-  \vspace{0.3em}
-  {\small PostgreSQL keeps old versions \textit{in the heap page itself}.
-  Simpler recovery --- but dead tuples accumulate until VACUUM.}
+% -----------------------------------------------------------------------------
+% Slide: MVCC guarantee
+% -----------------------------------------------------------------------------
+\begin{frame}{MVCC: The Guarantee}
+
+  \begin{block}{}
+    \textbf{Readers never block writers.
+    Writers never block readers.}\\[0.4em]
+    Each transaction sees a consistent snapshot of the database
+    as it existed when the transaction began.
+  \end{block}
 
 \end{frame}
 
