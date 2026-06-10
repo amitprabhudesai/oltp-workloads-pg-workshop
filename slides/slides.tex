@@ -277,43 +277,54 @@
 % -----------------------------------------------------------------------------
 % Slide: Tuple Insertion with WAL
 % -----------------------------------------------------------------------------
-\begin{frame}[fragile]{Tuple Insertion with WAL}
+% picture first — let it speak
+\begin{frame}[fragile,label=frTupleInsert]{Tuple Insertion with WAL}
 
-  \begin{columns}[T]
-    \column{0.44\textwidth}
-    \begin{enumerate}\small
-      \item \textbf{Checkpoint}: checkpointer writes a checkpoint record
-            containing the latest \textbf{REDO point} to WAL.
-      \item \textbf{INSERT}: backend loads the page into shared buffers,
-            inserts the tuple, writes an XLOG record at \texttt{LSN\_1},
-            updates the page header: \texttt{pd\_lsn} \texttt{LSN\_0}
-            $\to$ \texttt{LSN\_1}.
-      \item \textbf{COMMIT}: WAL buffer flushed to \texttt{pg\_wal/}
-            (\texttt{write} + \texttt{fsync}).
-      \item Subsequent INSERT: XLOG record at \texttt{LSN\_2};
-            \texttt{pd\_lsn} \texttt{LSN\_1} $\to$ \texttt{LSN\_2}.
-      \item \textbf{CRASH}: shared buffers lost; \texttt{pg\_wal/}
-            survives on disk. Recovery replays from the REDO point.
-    \end{enumerate}
-
-    \column{0.54\textwidth}
 \begin{lstlisting}[style=ascii]
-  Shared Buffers          WAL Buffer / pg_wal/
-  +----------------+      +--------------------+
-  | TABLE_A        |      |                    |
-  | [tup_1, tup_2] | <==  | XLOG @ LSN_2       |
-  | pd_lsn=LSN_2   |      | XLOG @ LSN_1       |
-  +----------------+      | CKPT @ REDO point  |
-                          +--------------------+
-          CRASH                    |
-            |                      v  (survives)
-            v               pg_wal/ on disk
-     lost (in RAM)
+  INSERT  --> (1) WAL buffer  : XLOG @ LSN_1  (write-ahead)
+          --> (2) Shared Buffers: page modified, pd_lsn = LSN_1
+  COMMIT  --> (3) pg_wal/     : write + fsync  (durable)
 
-  Recovery: read WAL from REDO point,
-            replay each XLOG record in order
+  INSERT  --> (1) WAL buffer  : XLOG @ LSN_2
+          --> (2) Shared Buffers: page modified, pd_lsn = LSN_2
+  COMMIT  --> (3) pg_wal/     : write + fsync
+
+  -------------------------------------------------------
+
+  Shared Buffers (RAM)          pg_wal/ (disk)
+  +----------------------+       +----------------------+
+  | TABLE_A              |       | XLOG @ LSN_2         |
+  | [tup_1, tup_2]       |       | XLOG @ LSN_1         |
+  | pd_lsn = LSN_2       |       | CKPT @ REDO_LSN  (0) |
+  +----------------------+       +----------------------+
+  lazy: flushed later             fsynced at COMMIT
+  (bgwriter / checkpoint)         survives crash
 \end{lstlisting}
-  \end{columns}
+
+{\tiny Heap tuple layout (header, \texttt{xmin}/\texttt{xmax}, data):
+\hyperlink{frA3}{\beamergotobutton{Appendix A3}}\par}
+
+\end{frame}
+
+% text reinforces the picture
+\begin{frame}{Tuple Insertion with WAL}
+
+  \begin{enumerate}\small
+    \setcounter{enumi}{-1}
+    \item {\color{gray}\textbf{Checkpoint}: checkpointer writes a
+          checkpoint record containing the latest \textbf{REDO point} to WAL.}
+    \item \textbf{INSERT}: backend loads the page into shared buffers,
+          inserts the tuple, writes an XLOG record at \texttt{LSN\_1},
+          updates the page header: \texttt{pd\_lsn} \texttt{LSN\_0}
+          $\to$ \texttt{LSN\_1}.
+    \item \textbf{COMMIT}: WAL buffer flushed to \texttt{pg\_wal/}
+          (\texttt{write} + \texttt{fsync}).
+    \item Subsequent INSERT: XLOG record at \texttt{LSN\_2};
+          \texttt{pd\_lsn} \texttt{LSN\_1} $\to$ \texttt{LSN\_2}.
+    \item \textbf{CRASH}: shared buffers lost; \texttt{pg\_wal/}
+          survives on disk. Recovery replays from the REDO point.
+  \end{enumerate}
+
 \end{frame}
 
 % -----------------------------------------------------------------------------
@@ -1551,7 +1562,7 @@ length, hole_offset, bimg_info.
 % -----------------------------------------------------------------------------
 % Appendix A3: Tuple Structure
 % -----------------------------------------------------------------------------
-\begin{frame}[fragile]{A3. Tuple Structure}
+\begin{frame}[fragile,label=frA3]{A3. Tuple Structure}
 
   \begin{columns}[T]
     \column{0.5\textwidth}
@@ -1586,6 +1597,9 @@ Each ItemId:
   \end{columns}
   {\small \texttt{t\_ctid} forms the version chain: old tuple points to new.
   VACUUM marks dead ItemIds as \texttt{Unused} and reclaims their space.}
+
+  \vspace{0.3em}
+  \hyperlink{frTupleInsert}{\beamerreturnbutton{Back}}
 \end{frame}
 
 % -----------------------------------------------------------------------------
