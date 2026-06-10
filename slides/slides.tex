@@ -409,42 +409,30 @@ exec_simple_query()                         [postgres.c]
 % Slide: Checkpoints detail
 % -----------------------------------------------------------------------------
 \begin{frame}[fragile]{Checkpoints: Bounding Recovery Time}
-  \begin{columns}[T]
-    \column{0.54\textwidth}
-    \textbf{What a checkpoint does:}
-    \begin{enumerate}\small
-      \item Flush all dirty pages from shared buffers to data files
-      \item Write a checkpoint WAL record with the \texttt{redo\_lsn}
-    \end{enumerate}
-    \textbf{On crash:} replay only WAL \textit{after} \texttt{redo\_lsn}.
-
-    \vspace{0.4em}
-    \textbf{Triggered by:}
-    \begin{itemize}\small
-      \item \texttt{checkpoint\_timeout} (default 5\,min)
-      \item \texttt{max\_wal\_size} exceeded
-      \item Explicit \texttt{CHECKPOINT} command
-    \end{itemize}
-
-    \vspace{0.3em}
-    {\small Larger \texttt{max\_wal\_size} \textrightarrow\
-    more WAL between checkpoints \textrightarrow\
-    better write throughput, \textit{but} longer crash recovery ---
-    a fundamental production trade-off.}
-
-    \column{0.44\textwidth}
 \begin{lstlisting}[style=ascii]
-  redo_lsn          current LSN
-     |                    |
-     v                    v
------+--------------------+--> WAL
-     |<-- replay on crash-|
-     |  (wal_since_chkpt) |
+  WITHOUT checkpoints            WITH checkpoints
+  -----------------------        -----------------------
+  WAL start       crash          CKPT_1      CKPT_2  crash
+     |               |              |           |       |
+     v               v              v           v       v
+-----+~~~~~~~~~~~~~~~+-->      -----+~~~~~~~~~~~+~~~~~~~+-->
+     |                              |           |       |
+     |<-- replay everything ------->|           |       |
+     |  (unbounded recovery time)               |       |
+                                                |<----->|
+                                                 replay only
+                                                 this window
 
-dirty pages already written
-to data files at checkpoint
+  At each checkpoint:
+  (1) flush all dirty pages from shared buffers to data files
+  (2) write CKPT record to WAL with redo_lsn
+
+  On crash: replay only WAL after the last redo_lsn
 \end{lstlisting}
-  \end{columns}
+
+{\small Triggered by: \texttt{checkpoint\_timeout} (default 5\,min)
+or \texttt{max\_wal\_size} exceeded.\quad
+Larger \texttt{max\_wal\_size} = better throughput, longer recovery.}
 \end{frame}
 
 % -----------------------------------------------------------------------------
