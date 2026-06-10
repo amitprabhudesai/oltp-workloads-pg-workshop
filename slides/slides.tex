@@ -834,39 +834,25 @@ At high concurrency, that wait queue becomes the bottleneck.}
 % -----------------------------------------------------------------------------
 \begin{frame}[fragile]{Tuple Versions: \texttt{xmin} and \texttt{xmax}}
 
-  \begin{columns}[T]
-    \column{0.48\textwidth}
-    Every heap tuple carries two transaction IDs:
-    \begin{itemize}\small
-      \item \textbf{\texttt{xmin}} --- txid that \textit{created} this version
-      \item \textbf{\texttt{xmax}} --- txid that \textit{deleted or superseded} it
-            (\texttt{0} = still live)
-      \item \textbf{\texttt{ctid}} --- physical pointer to the newer version
-    \end{itemize}
-
-    \vspace{0.4em}
-    These are system columns --- always present, normally hidden
-    from \texttt{SELECT *}.  Full tuple structure
-    (\texttt{t\_infomask}, ItemId layout) is in the \textbf{Appendix}.
-
-    \column{0.50\textwidth}
 \begin{lstlisting}[style=ascii]
-Before UPDATE:
- xmin | xmax | ctid  | balance
-------+------+-------+---------
-  200 |    0 | (0,1) | 9000.00
+SELECT xmin, xmax, ctid, name, balance FROM accounts WHERE name = 'Arun';
 
-Inside txid 201 after UPDATE:
- xmin | xmax | ctid  | balance
-------+------+-------+---------
-  200 |  201 | (0,2) | 9000.00  <- old
-  201 |    0 | (0,2) | 8000.00  <- new
+Before T1:
+ xmin | xmax | ctid  | name  | balance
+------+------+-------+-------+---------
+  100 |    0 | (0,1) | Arun  |    1000
 
-xmax=201 on old tuple signals
-"deleted by txid 201".
-ctid chain leads to live version.
+After T1 (txid 200) commits:
+ xmin | xmax | ctid  | name  | balance
+------+------+-------+-------+---------
+  100 |  200 | (0,2) | Arun  |    1000   <- xmax=200: superseded by T1
+  200 |    0 | (0,2) | Arun  |     700   <- live
 \end{lstlisting}
-  \end{columns}
+
+{\small \texttt{xmin}: txid that created this version \quad
+\texttt{xmax}: txid that superseded it (\texttt{0} = live) \quad
+\texttt{ctid}: physical location of the live version.}
+
 \end{frame}
 
 % -----------------------------------------------------------------------------
@@ -886,40 +872,52 @@ ctid chain leads to live version.
 % -----------------------------------------------------------------------------
 % Slide: Transaction Snapshots detail
 % -----------------------------------------------------------------------------
-\begin{frame}[fragile]{Transaction Snapshots}
+\begin{frame}[fragile]{Transaction Snapshots: The Visibility Fence}
 
-  \begin{columns}[T]
-    \column{0.50\textwidth}
-    A \textbf{snapshot} records which transactions were active at a
-    point in time.  Format: \texttt{xmin:xmax:xip\_list}
-
-    \begin{itemize}\small
-      \item \textbf{xmin}: all txids $<$ xmin are already committed
-      \item \textbf{xmax}: all txids $\geq$ xmax have not yet started
-      \item \textbf{xip\_list}: txids in between that are still running
-    \end{itemize}
-
-    \vspace{0.4em}
-    Any txid in \texttt{xip\_list} is treated as IN\_PROGRESS even if
-    it has since committed --- this is what makes REPEATABLE READ work.
-
-    \column{0.48\textwidth}
 \begin{lstlisting}[style=ascii]
-Snapshot: 100:104:100,102
-  xmin=100, xmax=104
-  active: txids 100 and 102
+Snapshot format:  xmin : xmax : xip_list   (pg_current_snapshot())
 
-READ COMMITTED:
-  new snapshot per statement
-  --> committed changes become
-      visible mid-transaction
+(a) "100:100:"    no transactions in flight at snapshot time
 
-REPEATABLE READ:
-  snapshot at first statement
-  --> same view for entire txn,
-      no matter what commits
+ past <--[...][98][99](100)(101)(102)(103)(104)[...]--> future
+                    ^
+                   xmin=xmax=100
+ [n] = visible     (n) = invisible (active or not yet started)
+
+(b) "100:104:100,102"    txids 100 and 102 still in flight
+
+ past <--[...][98][99](100)[101](102)[103](104)(105)[...]--> future
+
+ 98,99:      committed before xmin         -> visible
+ 100,102:    in xip_list (in-progress)     -> invisible
+ 101,103:    committed, not in xip_list    -> visible
+ 104,105:    >= xmax, not yet started      -> invisible
 \end{lstlisting}
-  \end{columns}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: Transaction Snapshots — READ COMMITTED vs REPEATABLE READ
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{Transaction Snapshots: When is Yours Taken?}
+
+\begin{lstlisting}[style=ascii]
+ time   T1: transfer (txid 200)   T2: READ COMMITTED    T3: REPEATABLE READ
+ ----   ----------------------    ------------------    -------------------
+  t1    BEGIN
+        UPDATE Arun 1000->700     BEGIN                 BEGIN
+  t2                              SELECT Arun           SELECT Arun
+                                  snapshot @ t2         snapshot @ t2
+                                  --> sees 1000         --> sees 1000
+  t3    COMMIT
+  t4                              SELECT Arun           SELECT Arun
+                                  NEW snapshot @ t4     SAME snapshot (t2)
+                                  --> sees 700          --> sees 1000
+\end{lstlisting}
+
+{\small \texttt{READ COMMITTED}: fresh snapshot per statement --- sees T1's commit at t4.\\
+\texttt{REPEATABLE READ}: snapshot fixed at \texttt{BEGIN} --- consistent view throughout.}
+
 \end{frame}
 
 % -----------------------------------------------------------------------------
@@ -927,79 +925,26 @@ REPEATABLE READ:
 % -----------------------------------------------------------------------------
 \begin{frame}[fragile]{Visibility Check Rules}
 
-  {\small For each tuple, PostgreSQL tests \texttt{xmin}/\texttt{xmax}
-  against the current snapshot:}
-
-  \vspace{0.3em}
 \begin{lstlisting}[style=ascii]
-t_xmin = ABORTED?             --> invisible  (rollback)
+For each tuple, test xmin and xmax against the current snapshot:
 
-t_xmin = IN_PROGRESS?
-  same txid, t_xmax = 0       --> visible    (I just inserted it)
+t_xmin ABORTED?               --> invisible  (rolled back)
+
+t_xmin IN_PROGRESS?
+  same txid, t_xmax = 0       --> visible    (my own insert)
   otherwise                   --> invisible  (dirty read blocked)
 
-t_xmin = COMMITTED?
+t_xmin COMMITTED?
   t_xmin active in snapshot   --> invisible  (snapshot fence)
   t_xmax = 0 or ABORTED       --> visible    (live tuple)
-  t_xmax IN_PROGRESS != me    --> visible    (concurrent delete, not done)
+  t_xmax IN_PROGRESS != me    --> visible    (concurrent delete pending)
   t_xmax COMMITTED,
-    not active in snapshot     --> invisible  (deleted and gone)
+    not active in snapshot     --> invisible  (deleted and visible)
 \end{lstlisting}
 
-  \vspace{0.3em}
-  {\small The snapshot acts as a \textbf{fence}: transactions that committed
-  after your snapshot was taken are treated as still in-progress,
-  preserving a consistent view.  Dirty reads are structurally impossible.}
+  {\small Dirty reads are structurally impossible: a tuple written by an
+  in-progress transaction is always invisible to other sessions.}
 
-\end{frame}
-
-% -----------------------------------------------------------------------------
-% Slide: Isolation Levels
-% -----------------------------------------------------------------------------
-\begin{frame}[fragile]{Isolation Levels}
-
-  \begin{columns}[T]
-    \column{0.48\textwidth}
-    \textbf{READ COMMITTED} (default)\\
-    {\small Fresh snapshot on each statement.}
-
-\begin{lstlisting}[style=ascii]
-Session A (READ COMMITTED):
-  T1: SELECT count(*) -> 10
-  -- Session B inserts + commits
-  T2: SELECT count(*) -> 11
-      (new snapshot at T2)
-\end{lstlisting}
-
-    \vspace{0.5em}
-    \textbf{REPEATABLE READ}\\
-    {\small Snapshot fixed at first statement.}
-
-\begin{lstlisting}[style=ascii]
-Session A (REPEATABLE READ):
-  T1: SELECT count(*) -> 10
-  -- Session B inserts + commits
-  T2: SELECT count(*) -> 10
-      (snapshot unchanged)
-\end{lstlisting}
-
-    \column{0.48\textwidth}
-    \vspace{0.5em}
-    \begin{tabular}{lll}
-      \toprule
-      \textbf{Level} & \textbf{NR Read} & \textbf{Phantom} \\
-      \midrule
-      READ COMMITTED  & possible  & possible  \\
-      REPEATABLE READ & prevented & prevented \\
-      SERIALIZABLE    & prevented & prevented \\
-      \bottomrule
-    \end{tabular}
-
-    \vspace{0.4em}
-    {\small Dirty reads are impossible at all levels in PostgreSQL.\\[0.3em]
-    REPEATABLE READ also prevents phantoms (SI property).\\
-    SSI (SERIALIZABLE) not covered today.}
-  \end{columns}
 \end{frame}
 
 % -----------------------------------------------------------------------------
