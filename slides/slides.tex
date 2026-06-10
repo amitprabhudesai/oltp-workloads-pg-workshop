@@ -525,6 +525,29 @@ Larger \texttt{max\_wal\_size} = better throughput, longer recovery.}
 
 \end{frame}
 
+% =============================================================================
+\section{WAL Performance Tuning}
+% =============================================================================
+
+% -----------------------------------------------------------------------------
+% Slide: Optional section divider
+% -----------------------------------------------------------------------------
+\begin{frame}{WAL Performance Tuning}
+
+  \begin{center}
+    {\large \textit{Optional --- cover if time allows}}
+  \end{center}
+
+  \vspace{0.6em}
+  \begin{itemize}
+    \item \textbf{The WAL Writer \& group commit} --- how PostgreSQL
+          amortises \texttt{fsync()} cost across concurrent transactions
+    \item \textbf{\texttt{synchronous\_commit}} --- the per-transaction
+          knob for trading a small durability window for throughput
+  \end{itemize}
+
+\end{frame}
+
 % -----------------------------------------------------------------------------
 % Slide: WAL Writer motivation
 % -----------------------------------------------------------------------------
