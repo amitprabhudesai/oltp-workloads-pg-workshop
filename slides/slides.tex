@@ -195,10 +195,9 @@
     \textbf{\faServer\enspace Module 1 --- WAL \& Durability}
     \begin{itemize}\small
       \item WAL write path \& record anatomy
-      \item \texttt{pg\_stat\_wal}: observing the stream
-      \item \texttt{synchronous\_commit}: the durability dial
       \item Checkpoints \& the recovery horizon
       \item Full-page images: the checkpoint tax
+      \item {\color{gray}WAL Writer \& \texttt{synchronous\_commit} \textit{(optional)}}
     \end{itemize}
 
     \column{0.48\textwidth}
@@ -660,26 +659,24 @@ Larger \texttt{max\_wal\_size} = better throughput, longer recovery.}
     \begin{itemize}\small
       \item Snapshot LSN with \texttt{pg\_current\_wal\_lsn()}
       \item Insert rows; measure WAL produced
-      \item Force a checkpoint; update existing rows
-      \item Watch \texttt{wal\_fpi} spike (FPI tax)
+      \item Force a checkpoint; watch \texttt{wal\_fpi} spike
     \end{itemize}
 
     \vspace{0.4em}
-    \textbf{Exercise 1.2 --- \texttt{synchronous\_commit} benchmark}
-    \begin{itemize}\small
-      \item Run inserts with \texttt{on} vs \texttt{off}
-      \item Compare \texttt{wal\_write} and \texttt{wal\_sync} deltas
-      \item Understand why the sync count is the real signal
-    \end{itemize}
-
-    \column{0.48\textwidth}
     \textbf{Exercise 1.3 --- Checkpoints \& write path}
     \begin{itemize}\small
       \item Establish baseline with explicit \texttt{CHECKPOINT}
       \item Insert rows; watch recovery horizon grow
       \item Checkpoint; watch it shrink
       \item Read \texttt{pg\_stat\_bgwriter} for I/O accounting
-      \item Discuss \texttt{buffers\_backend} in production
+    \end{itemize}
+
+    \column{0.48\textwidth}
+    \textbf{Exercise 1.2 --- \texttt{synchronous\_commit} \textit{(optional)}}
+    \begin{itemize}\small
+      \item Run inserts with \texttt{on} vs \texttt{off}
+      \item Compare \texttt{wal\_write} and \texttt{wal\_sync} deltas
+      \item Understand why the sync count is the real signal
     \end{itemize}
 
     \vspace{0.5em}
