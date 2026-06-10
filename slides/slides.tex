@@ -365,45 +365,30 @@ exec_simple_query()                         [postgres.c]
 % Slide: Database Recovery Using WAL
 % -----------------------------------------------------------------------------
 \begin{frame}[fragile]{Database Recovery Using WAL}
-
-  \begin{columns}[T]
-    \column{0.44\textwidth}
-    PostgreSQL replays XLOG records sequentially from the
-    \textbf{REDO point} (the LSN recorded at the last checkpoint).
-
-    \vspace{0.4em}
-    \textbf{Replay rule:} compare the XLOG record's LSN with
-    the page's \texttt{pd\_lsn}:
-    \begin{itemize}\small
-      \item \texttt{LSN\_record} $>$ \texttt{pd\_lsn}: apply the change
-            and update \texttt{pd\_lsn}
-      \item \texttt{LSN\_record} $\leq$ \texttt{pd\_lsn}: skip --- already
-            on disk before the crash
-    \end{itemize}
-
-    \vspace{0.3em}
-    {\small This idempotent check makes recovery safe whether or not
-    dirty pages reached disk before the crash.}
-
-    \column{0.54\textwidth}
 \begin{lstlisting}[style=ascii]
-  pg_wal/ (survived crash)
-  +-----------------------------------+
-  | CKPT record  --> REDO point       |
-  | XLOG INSERT  --> LSN_1            |
-  | XLOG INSERT  --> LSN_2            |
-  +-----------------------------------+
-          | replay from REDO point
-          v
-  1. Load TABLE_A page from storage
-     (pd_lsn = LSN_0, stale on disk)
-  2. LSN_1 > LSN_0: apply insert
-     pd_lsn = LSN_1
-  3. LSN_2 > LSN_1: apply insert
-     pd_lsn = LSN_2
+  NORMAL OPERATION
+  ---------------------------------------------------------
+  Shared Buffers (RAM)       pg_wal/ (fsynced at COMMIT)
+  +--------------------+     +-------------------------+
+  | TABLE_A            |     | XLOG INSERT @ LSN_2     |
+  | [tup_1, tup_2]     |     | XLOG INSERT @ LSN_1     |
+  | pd_lsn = LSN_2     |     | CKPT        @ REDO_LSN  |
+  +--------------------+     +-------------------------+
+
+  ** CRASH **: server dies; shared buffers gone; pg_wal/ survives
+  ---------------------------------------------------------
+  +--------------------+     +-------------------------+
+  | //// LOST /////    |     | XLOG INSERT @ LSN_2     |
+  | (RAM, gone)        |     | XLOG INSERT @ LSN_1     |
+  +--------------------+     | CKPT        @ REDO_LSN  |
+                             +-------------------------+
+  RECOVERY: replay pg_wal/ forward from REDO_LSN
+  ---------------------------------------------------------
+  LSN_1 > pd_lsn(0)?  YES --> apply insert;  pd_lsn = LSN_1
+  LSN_2 > pd_lsn(1)?  YES --> apply insert;  pd_lsn = LSN_2
+  LSN   <= pd_lsn?    NO  --> skip (already on disk)
   --> database restored to pre-crash state
 \end{lstlisting}
-  \end{columns}
 \end{frame}
 
 % -----------------------------------------------------------------------------
