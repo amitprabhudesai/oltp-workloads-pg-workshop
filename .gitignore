@@ -7,6 +7,9 @@
 *.swp
 *~
 
+# Test runner output (generated; not versioned)
+tests/regress/out/
+
 # LaTeX build artefacts
 slides/*.aux
 slides/*.log
