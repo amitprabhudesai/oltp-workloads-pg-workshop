@@ -1,0 +1,12 @@
+# Normalize all text files to LF in the repository.
+* text=auto eol=lf
+
+# Shell scripts and SQL must always be LF (they break with CRLF on Linux).
+*.sh   text eol=lf
+*.sql  text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.sed  text eol=lf
+*.out  text eol=lf
+Dockerfile text eol=lf

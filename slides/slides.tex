@@ -1,0 +1,1803 @@
+% =============================================================================
+% Write Path in OLTP Workloads — rootconf 2026
+% A hands-on PostgreSQL workshop
+%
+% Compile with:  lualatex slides.tex   (run twice for page numbers)
+% =============================================================================
+\documentclass[aspectratio=169,10pt]{beamer}
+
+% ── Theme ─────────────────────────────────────────────────────────────────────
+\usetheme[
+  progressbar=frametitle,
+  block=fill,
+  sectionpage=progressbar,
+  numbering=fraction,
+]{metropolis}
+\usepackage{appendixnumberbeamer}
+
+% ── Fonts (LuaLaTeX) ──────────────────────────────────────────────────────────
+% Metropolis uses Fira Sans / Fira Mono, both included in MacTeX.
+\usepackage{fontspec}
+
+% ── PostgreSQL colour palette ─────────────────────────────────────────────────
+\definecolor{pgblue}{HTML}{336791}    % PostgreSQL brand blue
+\definecolor{pgdark}{HTML}{1e3a5c}
+\definecolor{pglight}{HTML}{eaf1f8}
+\definecolor{pgaccent}{HTML}{0075b8}
+\definecolor{codebg}{HTML}{f4f4f4}
+\definecolor{alertred}{HTML}{c0392b}
+
+\setbeamercolor{frametitle}{bg=pgblue, fg=white}
+\setbeamercolor{progress bar}{fg=pgaccent, bg=pgblue!30}
+\setbeamercolor{alerted text}{fg=pgaccent}
+\setbeamercolor{block title}{bg=pgblue!15, fg=pgdark}
+\setbeamercolor{block title alerted}{bg=alertred!15, fg=alertred!80!black}
+
+% ── Packages ──────────────────────────────────────────────────────────────────
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{fontawesome5}
+\usepackage{fancyvrb}
+\usepackage{hyperref}
+
+% ── SQL listing style ─────────────────────────────────────────────────────────
+\lstdefinestyle{sql}{
+  language=SQL,
+  basicstyle=\ttfamily\footnotesize,
+  keywordstyle=\color{pgblue}\bfseries,
+  commentstyle=\color{gray}\itshape,
+  stringstyle=\color{teal},
+  showstringspaces=false,
+  breaklines=true,
+  frame=single,
+  backgroundcolor=\color{codebg},
+  rulecolor=\color{pgblue!40},
+  framesep=3pt,
+  xleftmargin=2pt,
+  xrightmargin=2pt,
+  belowskip=0pt,
+}
+
+% ── ASCII / diagram listing style ─────────────────────────────────────────────
+\lstdefinestyle{ascii}{
+  basicstyle=\ttfamily\scriptsize,
+  showstringspaces=false,
+  frame=none,
+  backgroundcolor=\color{codebg},
+  belowskip=0pt,
+  xleftmargin=2pt,
+}
+
+% ── Metadata ──────────────────────────────────────────────────────────────────
+\title{Write Path in OLTP Workloads}
+\subtitle{A Hands-On PostgreSQL Workshop}
+\author{Amit Prabhudesai}
+\institute{Tech Lead, Microsoft}
+\date{rootconf 2026}
+
+% =============================================================================
+\begin{document}
+% =============================================================================
+
+\maketitle
+
+% -----------------------------------------------------------------------------
+% Slide: About Me
+% -----------------------------------------------------------------------------
+\begin{frame}{About Me}
+  \begin{columns}[T]
+    \column{0.62\textwidth}
+    \begin{itemize}
+      \item \textbf{Tech Lead, Microsoft}
+      \item \href{https://github.com/documentdb/documentdb}{%
+        \faGithub\enspace\texttt{documentdb/documentdb}}
+      \item Ex-InMobi (China-engg all-up; Architect, InMobi Ad SDK)
+      \item Worn both hats: Engineering Manager \textit{and} Tech Lead
+    \end{itemize}
+    \vspace{0.6em}
+    {\small Slides, exercises, and devcontainer:}\\[0.3em]
+    \href{https://github.com/amitprabhudesai/oltp-workloads-pg-workshop}{%
+      \faGithub\enspace\texttt{amitprabhudesai/oltp-workloads-pg-workshop}}
+
+    \column{0.34\textwidth}
+    \vspace{1em}
+    {\large\faGithub}\enspace\texttt{amitprabhudesai}\\[0.5em]
+    {\large\faTwitter}\enspace\href{https://x.com/amitprabhudesai}{\texttt{@amitprabhudesai}}
+  \end{columns}
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: About This Workshop
+% -----------------------------------------------------------------------------
+\begin{frame}{About This Workshop}
+
+  \begin{block}{Database systems as fact-keepers}
+    \textbf{Durability.} Records persist reliably ---
+     committed data survives crashes and restarts.\\[0.3em]
+    \textbf{Correctness.} Change is constant; interleaved reads and
+     writes must faithfully reflect the intent of every update.\\[0.3em]
+    \textbf{Performance.} Neither guarantee is useful with unbounded
+     latency or unsustainable write amplification.\\[0.4em]
+    {\small This workshop is about the mechanisms PostgreSQL uses
+    to honour all three.}
+  \end{block}
+  \vspace{0.6em}
+  \begin{columns}[T]
+    \column{0.48\textwidth}
+    \textbf{Module 1 --- WAL \& Durability}\\[0.2em]
+    {\small How PostgreSQL guarantees durability without sacrificing throughput.}
+
+    \column{0.48\textwidth}
+    \textbf{Module 2 --- MVCC \& Concurrency}\\[0.2em]
+    {\small How multiple writers coexist and what the hidden costs are.}
+  \end{columns}
+
+  \vspace{0.8em}
+  \begin{center}
+    {\small
+    \faTools\enspace
+    Each module: short theory \textrightarrow\ hands-on exercises \textrightarrow\ debrief\\[0.3em]
+    \faDocker\enspace
+    devcontainer included --- \texttt{docker} is enough, no local Postgres needed.
+    }
+  \end{center}
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: Why PostgreSQL?
+% -----------------------------------------------------------------------------
+\begin{frame}{Why PostgreSQL?}
+  \begin{columns}[T]
+    \column{0.58\textwidth}
+    \begin{itemize}
+      \item DocumentDB is a PostgreSQL extension
+      \item \alert{\#1 most-used database} in the Stack\,Overflow Developer
+            Survey --- \textbf{three years running} (2023, 2024, 2025)
+      \item Well-documented internals: source is readable, WAL format is
+            stable, behaviour is inspectable with plain SQL
+      \item The concepts transfer directly:\\
+            MySQL binlog \textbullet\ CockroachDB Raft log \textbullet\
+            AWS Aurora redo log --- all WAL variants
+      \item Open source: you can \textit{read what actually runs}
+    \end{itemize}
+
+    \column{0.38\textwidth}
+    \vspace{0.4em}
+    {\footnotesize Stack\,Overflow Developer Survey 2025\\
+    \textit{Technology --- Databases}:}
+    \vspace{0.3em}
+
+    \begin{tabular}{lr}
+      \toprule
+      \textbf{Database} & \textbf{Usage} \\
+      \midrule
+      \textbf{PostgreSQL} & \textbf{49\,\%} \\
+      MySQL               & 40\,\% \\
+      SQLite              & 33\,\% \\
+      Redis               & 28\,\% \\
+      \bottomrule
+    \end{tabular}
+
+    \vspace{0.3em}
+    {\scriptsize\textit{survey.stackoverflow.co/2025}}
+  \end{columns}
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: Workshop Structure
+% -----------------------------------------------------------------------------
+\begin{frame}{Workshop Structure}
+  \begin{columns}[T]
+    \column{0.48\textwidth}
+    \textbf{\faServer\enspace Module 1 --- WAL \& Durability}
+    \begin{itemize}\small
+      \item WAL write path \& record anatomy
+      \item Checkpoints \& the recovery horizon
+      \item Full-page images: the checkpoint tax
+      \item {\color{gray}WAL Writer \& \texttt{synchronous\_commit} \textit{(optional)}}
+    \end{itemize}
+
+    \column{0.48\textwidth}
+    \textbf{\faDatabase\enspace Module 2 --- MVCC \& Concurrency}
+    \begin{itemize}\small
+      \item Isolation anomalies \& the MVCC model
+      \item Snapshot isolation: xmin, xmax, visibility
+      \item Lost updates \& \texttt{SELECT FOR UPDATE}
+      \item VACUUM \& bloat
+    \end{itemize}
+  \end{columns}
+
+  \vspace{0.7em}
+  \begin{center}
+    {\small\faTerminal\enspace
+     All exercises run in a self-contained devcontainer (PostgreSQL\,16 + psql).\\
+     Open \texttt{modules/0X-.../exercises.sql} and follow along.}
+  \end{center}
+\end{frame}
+
+% =============================================================================
+\section{Module 1 --- WAL \& Durability}
+% =============================================================================
+
+% -----------------------------------------------------------------------------
+% Slide: The Durability Problem — motivation
+% -----------------------------------------------------------------------------
+\begin{frame}{The Durability Problem}
+
+  \begin{block}{}
+    A \texttt{COMMIT} returns to the client.  The modified pages sit
+    in shared buffers\footnote{\url{https://www.postgresql.org/docs/16/runtime-config-resource.html\#GUC-SHARED-BUFFERS}} --- in RAM.\\[0.4em]
+    What happens if the server crashes before those pages reach disk?
+  \end{block}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: The Durability Problem — detail
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{The Durability Problem}
+
+  \begin{lstlisting}[style=ascii]
+  (1) BEGIN; INSERT INTO tbl VALUES ('A'); COMMIT;
+  (2)              BEGIN; INSERT INTO tbl VALUES ('B'); COMMIT; --> CRASH
+
+  RAM:  +----------+        +----------+        +----------+
+        | TABLE_A  |  --->  | TABLE_A  |  --->  | TABLE_A  |
+        | [empty]  |        |   [ A ]  |        | [ B | A ]|
+        +----------+        +----------+        +----------+
+                                                      |
+                                          never flushed to disk
+  disk: +----------+
+        | TABLE_A  |  <-- both commits LOST; page still empty after restart
+        | [empty]  |
+        +----------+
+  \end{lstlisting}
+
+  \vspace{0.4em}
+  \textbf{The insight:} a \textit{log} is always appended sequentially.\footnote{Sequential writes are 10--100$\times$ cheaper than random writes on spinning disk; meaningfully cheaper even on SSD.}
+  If the log is durable, the data pages can be written lazily.
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: WAL Principle
+% -----------------------------------------------------------------------------
+\begin{frame}{The Write-Ahead Log}
+
+  \begin{block}{}
+    Record all modifications as history data in persistent storage.
+    This history is called \textbf{XLOG} or \textbf{WAL data}.
+  \end{block}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: Tuple Insertion with WAL
+% -----------------------------------------------------------------------------
+% picture first — let it speak
+\begin{frame}[fragile,label=frTupleInsert]{Tuple Insertion with WAL}
+
+\begin{lstlisting}[style=ascii]
+  INSERT  --> (1) WAL buffer  : XLOG @ LSN_1  (write-ahead)
+          --> (2) Shared Buffers: page modified, pd_lsn = LSN_1
+  COMMIT  --> (3) pg_wal/     : write + fsync  (durable)
+
+  INSERT  --> (1) WAL buffer  : XLOG @ LSN_2
+          --> (2) Shared Buffers: page modified, pd_lsn = LSN_2
+  COMMIT  --> (3) pg_wal/     : write + fsync
+
+  -------------------------------------------------------
+
+  Shared Buffers (RAM)          pg_wal/ (disk)
+  +----------------------+       +----------------------+
+  | TABLE_A              |       | XLOG @ LSN_2         |
+  | [tup_1, tup_2]       |       | XLOG @ LSN_1         |
+  | pd_lsn = LSN_2       |       | CKPT @ REDO_LSN  (0) |
+  +----------------------+       +----------------------+
+  lazy: flushed later             fsynced at COMMIT
+  (bgwriter / checkpoint)         survives crash
+\end{lstlisting}
+
+{\tiny Heap tuple layout (header, \texttt{xmin}/\texttt{xmax}, data):
+\hyperlink{frA3}{\beamergotobutton{Appendix A3}}\par}
+
+\end{frame}
+
+% text reinforces the picture
+\begin{frame}{Tuple Insertion with WAL}
+
+  \begin{enumerate}\small
+    \setcounter{enumi}{-1}
+    \item {\color{gray}\textbf{Checkpoint}: checkpointer writes a
+          checkpoint record containing the latest \textbf{REDO point} to WAL.}
+    \item \textbf{INSERT}: backend loads the page into shared buffers,
+          inserts the tuple, writes an XLOG record at \texttt{LSN\_1},
+          updates the page header: \texttt{pd\_lsn} \texttt{LSN\_0}
+          $\to$ \texttt{LSN\_1}.
+    \item \textbf{COMMIT}: WAL buffer flushed to \texttt{pg\_wal/}
+          (\texttt{write} + \texttt{fsync}).
+    \item Subsequent INSERT: XLOG record at \texttt{LSN\_2};
+          \texttt{pd\_lsn} \texttt{LSN\_1} $\to$ \texttt{LSN\_2}.
+    \item \textbf{CRASH}: shared buffers lost; \texttt{pg\_wal/}
+          survives on disk. Recovery replays from the REDO point.
+  \end{enumerate}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: exec_simple_query() — WAL write path (also Appendix A6)
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{\texttt{exec\_simple\_query()}: WAL Write Path}
+
+\begin{lstlisting}[style=ascii]
+exec_simple_query()                         [postgres.c]
+  |
+  +-- (1) ExtendCLOG()                      [clog.c]
+  |        mark txid IN_PROGRESS in CLOG
+  |
+  +-- (2) heap_insert()                     [heapam.c]
+  |        insert tuple into shared buffer page
+  |   |
+  |   +-- (3) XLogInsert()                  [xloginsert.c]
+  |            write Heap/INSERT record to WAL buffer
+  |            update page pd_lsn := LSN_1
+  |
+  +-- (4) finish_xact_command()             [postgres.c]
+      |    commit action
+      |
+      +-- (4a) XLogInsert()                 [xloginsert.c]
+      |         write Commit record to WAL buffer (LSN_2)
+      |
+      +-- (5) XLogWrite()                   [xlog.c]
+      |        flush WAL buffer -> WAL segment file
+      |        (fsync / fdatasync / O_DSYNC per wal_sync_method)
+      |
+      +-- (6) TransactionIdCommitTree()     [transam.c]
+               mark txid COMMITTED in CLOG
+\end{lstlisting}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: Database Recovery Using WAL
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{Database Recovery Using WAL}
+\begin{lstlisting}[style=ascii]
+  NORMAL OPERATION
+  ---------------------------------------------------------
+  Shared Buffers (RAM)       pg_wal/ (fsynced at COMMIT)
+  +--------------------+     +-------------------------+
+  | TABLE_A            |     | XLOG INSERT @ LSN_2     |
+  | [tup_1, tup_2]     |     | XLOG INSERT @ LSN_1     |
+  | pd_lsn = LSN_2     |     | CKPT        @ REDO_LSN  |
+  +--------------------+     +-------------------------+
+
+  ** CRASH **: server dies; shared buffers gone; pg_wal/ survives
+  ---------------------------------------------------------
+  +--------------------+     +-------------------------+
+  | //// LOST /////    |     | XLOG INSERT @ LSN_2     |
+  | (RAM, gone)        |     | XLOG INSERT @ LSN_1     |
+  +--------------------+     | CKPT        @ REDO_LSN  |
+                             +-------------------------+
+  RECOVERY: replay pg_wal/ forward from REDO_LSN
+  ---------------------------------------------------------
+  LSN_1 > pd_lsn(0)?  YES --> apply insert;  pd_lsn = LSN_1
+  LSN_2 > pd_lsn(1)?  YES --> apply insert;  pd_lsn = LSN_2
+  LSN   <= pd_lsn?    NO  --> skip (already on disk)
+  --> database restored to pre-crash state
+\end{lstlisting}
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: Checkpoints motivation
+% -----------------------------------------------------------------------------
+\begin{frame}{Checkpoints}
+
+  \begin{block}{}
+    Recovery replays WAL from some starting point.
+    If that starting point is the very beginning of WAL history,
+    recovery time is unbounded.\\[0.4em]
+    How does the database keep restart time predictable?
+  \end{block}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: Checkpoints detail
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{Checkpoints: Bounding Recovery Time}
+\begin{lstlisting}[style=ascii]
+  WITHOUT checkpoints            WITH checkpoints
+  -----------------------        -----------------------
+  WAL start       crash          CKPT_1      CKPT_2  crash
+     |               |              |           |       |
+     v               v              v           v       v
+-----+~~~~~~~~~~~~~~~+-->      -----+~~~~~~~~~~~+~~~~~~~+-->
+     |                              |           |       |
+     |<-- replay everything ------->|           |       |
+     |  (unbounded recovery time)               |       |
+                                                |<----->|
+                                                 replay only
+                                                 this window
+
+  At each checkpoint:
+  (1) flush all dirty pages from shared buffers to data files
+  (2) write CKPT record to WAL with redo_lsn
+
+  On crash: replay only WAL after the last redo_lsn
+\end{lstlisting}
+
+{\small Triggered by: \texttt{checkpoint\_timeout} (default 5\,min)
+or \texttt{max\_wal\_size} exceeded.\quad
+Larger \texttt{max\_wal\_size} = better throughput, longer recovery.}
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: Exercise 1.3 cue
+% -----------------------------------------------------------------------------
+\begin{frame}{Exercise 1.3 --- Checkpoints \& Write Path}
+
+  \begin{block}{}
+    \faTerminal\enspace\texttt{modules/01-wal-durability/exercises.sql}\\[0.5em]
+    Run an explicit \texttt{CHECKPOINT}, insert rows, watch the recovery
+    horizon grow in \texttt{pg\_stat\_wal}.\\[0.3em]
+    Checkpoint again; check \texttt{pg\_stat\_bgwriter} for
+    \texttt{buffers\_backend} --- the write-pressure signal.
+  \end{block}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: Full-Page Writes
+% -----------------------------------------------------------------------------
+\begin{frame}{Full-Page Writes}
+
+  \begin{block}{}
+    WAL records the \textit{change} --- a delta.  Recovery replays
+    that delta onto the page on disk.\\[0.4em]
+    But what if the page on disk was only half-written when the
+    crash happened?
+  \end{block}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: Full-Page Writes — Backup Blocks
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{Full-Page Writes: Backup Blocks}
+\begin{lstlisting}[style=ascii]
+  --[CKPT]----------+------------------+----------> WAL
+                    |                  |
+               1st write           2nd write
+               to page P           to page P
+                    |                  |
+                    v                  v
+             +------------+      +----------+
+             | FPI        |      | delta    |  WAL record
+             | full 8 kB  |      | ~100 B   |
+             | page image |      | (changed |
+             |            |      |  bytes)  |
+             +------------+      +----------+
+
+  ** OS crash ** while bgwriter flushes page P to disk:
+
+  data file                       pg_wal/ (survived)
+  +--------------------+          +----------------+
+  | page P             |          | FPI  @ LSN_1   |
+  | [????|good data]   |          | delta@ LSN_2   |
+  |  ^^^^ torn write   |          +----------------+
+  +--------------------+
+                                  Recovery:
+                                  FPI  --> overwrite page P wholesale
+                                  delta--> replay cleanly on good page
+\end{lstlisting}
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: Full-Page Images motivation
+% -----------------------------------------------------------------------------
+\begin{frame}{Full-Page Images: The Checkpoint Tax}
+
+  \begin{block}{}
+    After each checkpoint, the first write to any dirty page embeds
+    the \textit{entire} 8\,kB page in the WAL record --- not just the delta.
+    This guarantees recovery even from a torn page.\\[0.4em]
+    There are no free lunches.  What does this cost?
+  \end{block}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: Exercise 1.1 cue
+% -----------------------------------------------------------------------------
+\begin{frame}{Exercise 1.1 --- Observing WAL Generation}
+
+  \begin{block}{}
+    \faTerminal\enspace\texttt{modules/01-wal-durability/exercises.sql}\\[0.5em]
+    Snapshot \texttt{pg\_current\_wal\_lsn()}, insert rows, measure the
+    delta.\\[0.3em]
+    Force a \texttt{CHECKPOINT}, update rows, watch \texttt{wal\_fpi}
+    spike in \texttt{pg\_stat\_wal}.
+  \end{block}
+
+\end{frame}
+
+% =============================================================================
+\section{WAL Performance Tuning}
+% =============================================================================
+
+% -----------------------------------------------------------------------------
+% Slide: Optional section divider
+% -----------------------------------------------------------------------------
+\begin{frame}{WAL Performance Tuning}
+
+  \begin{center}
+    {\large \textit{Optional --- cover if time allows}}
+  \end{center}
+
+  \vspace{0.6em}
+  \begin{itemize}
+    \item \textbf{The WAL Writer \& group commit} --- how PostgreSQL
+          amortises \texttt{fsync()} cost across concurrent transactions
+    \item \textbf{\texttt{synchronous\_commit}} --- the per-transaction
+          knob for trading a small durability window for throughput
+  \end{itemize}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: WAL Writer motivation
+% -----------------------------------------------------------------------------
+\begin{frame}{The WAL Writer Process}
+
+  \begin{block}{}
+    Every committed transaction must flush WAL to disk.\\[0.4em]
+    With hundreds of concurrent commits per second ---
+    how do you avoid turning that into hundreds of sequential
+    \texttt{fsync()} calls?
+  \end{block}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: WAL Writer detail
+% -----------------------------------------------------------------------------
+\begin{frame}{The WAL Writer Process: Group Commit}
+
+  \textbf{What it does:}
+  \begin{itemize}
+    \item Background process; wakes every \texttt{wal\_writer\_delay}
+          (default 200\,ms)
+    \item Flushes pending WAL from shared buffers to \texttt{pg\_wal/}
+    \item Also woken immediately by backends waiting on
+          \texttt{synchronous\_commit = on}
+  \end{itemize}
+
+  \vspace{0.5em}
+  \textbf{Group commit:}
+  \begin{itemize}
+    \item Multiple concurrent \texttt{COMMIT}s accumulated in the WAL buffer
+          are flushed in a single \texttt{write()} + \texttt{fsync()}
+    \item With high concurrency: \texttt{wal\_write} $\ll$ number of commits
+          --- a real saving on spinning disk, meaningful on NVMe
+  \end{itemize}
+
+  \vspace{0.3em}
+  {\small Observable in \texttt{pg\_stat\_wal}: compare \texttt{wal\_write}
+  and \texttt{wal\_sync} counts against the commit count.}
+
+  \vspace{0.4em}
+  \alert{The catch:} each committing backend still \textit{waits} for the
+  shared fsync to complete before \texttt{COMMIT} returns --- the cost is
+  amortized across concurrent transactions, not eliminated.
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: synchronous_commit motivation
+% -----------------------------------------------------------------------------
+\begin{frame}{Durability vs Performance tradeoff}
+
+  \begin{block}{}
+    Durability has a cost: every \texttt{COMMIT} waits for WAL to be
+    fsynced to disk before returning to the client.\\[0.4em]
+    Can the database offer a tunable knob for trading off RPO\footnote{RPO (Recovery Point Objective) --- the maximum committed data loss a workload can tolerate after a crash.} and
+    performance for different kinds of workloads?
+  \end{block}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: synchronous_commit detail
+% -----------------------------------------------------------------------------
+\begin{frame}{\texttt{synchronous\_commit}: The Durability Dial}
+
+  {\small Set per-session or per-transaction. Cluster default: \texttt{on}.}
+
+  \vspace{0.4em}
+  \begin{tabularx}{\textwidth}{l X l}
+    \toprule
+    \textbf{Setting} & \textbf{COMMIT returns when \ldots} & \textbf{Max data loss} \\
+    \midrule
+    \texttt{on}             & WAL written \textit{and} fsynced locally          & none \\[3pt]
+    \texttt{remote\_apply} & WAL applied on standby before COMMIT returns      & none on primary \\[3pt]
+    \texttt{remote\_write} & WAL written to standby OS buffer                  & standby hard crash \\[3pt]
+    \texttt{local}         & WAL fsynced locally only (standby may lag)        & none on primary \\[3pt]
+    \texttt{off}           & WAL appended to shared buffer                     & $\leq$ \texttt{wal\_writer\_delay} \\
+    \bottomrule
+  \end{tabularx}
+
+  \vspace{0.5em}
+  \alert{Key:} \texttt{off} does \textit{not} risk corruption.
+  The database always stays \textbf{consistent} --- you only risk losing
+  the last $\leq$\,200\,ms of committed data.
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: Exercise 1.2 cue
+% -----------------------------------------------------------------------------
+\begin{frame}{Exercise 1.2 --- \texttt{synchronous\_commit}}
+
+  \begin{block}{}
+    \faTerminal\enspace\texttt{modules/01-wal-durability/exercises.sql}\\[0.5em]
+    Run the benchmark.  Watch \texttt{wal\_write} and \texttt{wal\_sync}
+    in \texttt{pg\_stat\_wal}.\\[0.3em]
+    The sync \textit{count} is the signal --- not the wall-clock time.
+  \end{block}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: Module 1 Exercises
+% -----------------------------------------------------------------------------
+\begin{frame}{Module 1: Hands-On Exercises}
+  \begin{columns}[T]
+    \column{0.48\textwidth}
+    \textbf{Exercise 1.1 --- Observing WAL generation}
+    \begin{itemize}\small
+      \item Snapshot LSN with \texttt{pg\_current\_wal\_lsn()}
+      \item Insert rows; measure WAL produced
+      \item Force a checkpoint; watch \texttt{wal\_fpi} spike
+    \end{itemize}
+
+    \vspace{0.4em}
+    \textbf{Exercise 1.3 --- Checkpoints \& write path}
+    \begin{itemize}\small
+      \item Establish baseline with explicit \texttt{CHECKPOINT}
+      \item Insert rows; watch recovery horizon grow
+      \item Checkpoint; watch it shrink
+      \item Read \texttt{pg\_stat\_bgwriter} for I/O accounting
+    \end{itemize}
+
+    \column{0.48\textwidth}
+    \textbf{Exercise 1.2 --- \texttt{synchronous\_commit} \textit{(optional)}}
+    \begin{itemize}\small
+      \item Run inserts with \texttt{on} vs \texttt{off}
+      \item Compare \texttt{wal\_write} and \texttt{wal\_sync} deltas
+      \item Understand why the sync count is the real signal
+    \end{itemize}
+
+    \vspace{0.5em}
+    {\small\faTerminal\enspace
+    \texttt{modules/01-wal-durability/exercises.sql}}
+  \end{columns}
+\end{frame}
+
+% =============================================================================
+\section{Module 2 --- MVCC \& Concurrency}
+% =============================================================================
+
+% -----------------------------------------------------------------------------
+% Slide: Isolation motivation — bank transfer anomaly
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{The Isolation Problem}
+
+\begin{lstlisting}[style=ascii]
+  Initial:  Arun=1000  Babita=500  Chirag=1500  (total = 3000)
+  ----------------------------------------------------------------
+
+  T1: transfer Arun -> Babita (300)    T2: audit (read all balances)
+  ----------------------------------   ----------------------------
+  BEGIN
+  UPDATE Arun   1000 -> 700
+  UPDATE Babita  500 -> 800
+                                       BEGIN
+                                       SELECT Arun   --> 1000 (*)
+  COMMIT <---- commits here ----------+
+                                       SELECT Babita -->  800 (**)
+                                       SELECT Chirag --> 1500
+                                       -------------------------
+                                       total = 3300  (?!)
+  ----------------------------------------------------------------
+  (*) T1 not yet committed: T2 sees Arun = 1000
+  (**) T1 already committed: T2 now sees Babita = 800
+
+  T2 observed both the old Arun and the new Babita.
+  300 appeared out of thin air.
+\end{lstlisting}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: Solution approach 1 — locking
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{Approach 1: Locking}
+
+\begin{lstlisting}[style=ascii]
+  T1: transfer Arun -> Babita (300)    T2: audit
+  ----------------------------------   -------------------------
+  BEGIN
+  UPDATE Arun   1000 -> 700
+  UPDATE Babita  500 -> 800
+  (holds locks on both rows)           BEGIN
+                                       SELECT Arun ... BLOCKED
+                                           |
+                                           | waiting for T1
+                                           |
+  COMMIT  (releases locks) ----------->   |
+                                       SELECT Arun   --> 700
+                                       SELECT Babita --> 800
+                                       SELECT Chirag --> 1500
+                                       -------------------------
+                                       total = 3000  (correct)
+\end{lstlisting}
+
+{\small Correct --- but T2 sat idle while T1 worked.
+At high concurrency, that wait queue becomes the bottleneck.}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: Solution approach 2 — MVCC
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{Approach 2: MVCC}
+
+\begin{lstlisting}[style=ascii]
+  T1: transfer Arun -> Babita (300)    T2: audit
+  ----------------------------------   -------------------------
+  BEGIN
+  UPDATE Arun   1000 -> 700            BEGIN  <-- snapshot here
+  UPDATE Babita  500 -> 800
+                                       SELECT Arun   --> 1000 (*)
+  COMMIT
+                                       SELECT Babita -->  500 (*)
+                                       SELECT Chirag --> 1500
+                                       -------------------------
+                                       total = 3000  (correct)
+
+  (*) T2 reads the row version visible at its snapshot time.
+      T1 and T2 never blocked each other.
+\end{lstlisting}
+
+{\small How does PostgreSQL know which version to show T2? \textrightarrow\ next.}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: MVCC motivation
+% -----------------------------------------------------------------------------
+\begin{frame}{MVCC: Multi-Version Concurrency Control}
+
+  \begin{block}{}
+    In a lock-based system, a writer holds an exclusive lock on a row
+    while it works.  Every concurrent reader must wait.\\[0.4em]
+    At high concurrency, that wait queue becomes the bottleneck.
+    Can we do better?
+  \end{block}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: MVCC — The Core Idea
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{MVCC: The Core Idea}
+
+\begin{lstlisting}[style=ascii]
+  accounts heap page, after T1 (transfer) commits:
+
+  +--------------------------------------------------+
+  | tuple_1: xmin=T0  xmax=T1  Arun  balance=1000   | <- old
+  | tuple_2: xmin=T1  xmax=0   Arun  balance= 700   | <- live
+  +--------------------------------------------------+
+  T0 = txid that originally set Arun's balance to 1000
+
+  T2 snapshot taken before T1 committed:
+    reads tuple_1 --> Arun = 1000
+
+  T3 snapshot taken after T1 committed:
+    reads tuple_2 --> Arun = 700
+
+  Both reads served from the same page.
+  Neither T2 nor T3 blocked T1.
+\end{lstlisting}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: MVCC guarantee
+% -----------------------------------------------------------------------------
+\begin{frame}{MVCC: The Guarantee}
+
+  \begin{block}{}
+    \textbf{Readers never block writers.
+    Writers never block readers.}\\[0.4em]
+    Each transaction sees a consistent snapshot of the database
+    as it existed when the transaction began.
+  \end{block}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: xmin and xmax
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{Tuple Versions: \texttt{xmin} and \texttt{xmax}}
+
+\begin{lstlisting}[style=ascii]
+SELECT xmin, xmax, ctid, name, balance FROM accounts WHERE name = 'Arun';
+
+Before T1:
+ xmin | xmax | ctid  | name  | balance
+------+------+-------+-------+---------
+  100 |    0 | (0,1) | Arun  |    1000
+
+After T1 (txid 200) commits:
+ xmin | xmax | ctid  | name  | balance
+------+------+-------+-------+---------
+  100 |  200 | (0,2) | Arun  |    1000   <- xmax=200: superseded by T1
+  200 |    0 | (0,2) | Arun  |     700   <- live
+\end{lstlisting}
+
+{\small \texttt{xmin}: txid that created this version \quad
+\texttt{xmax}: txid that superseded it (\texttt{0} = live) \quad
+\texttt{ctid}: physical location of the live version.}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: Transaction Snapshots motivation
+% -----------------------------------------------------------------------------
+\begin{frame}{Transaction Snapshots}
+
+  \begin{block}{}
+    Multiple versions of the same row coexist on disk.
+    \texttt{xmin} and \texttt{xmax} say who created them.\\[0.4em]
+    But how does a transaction decide which version it is
+    allowed to see?
+  \end{block}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: Transaction Snapshots detail
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{Transaction Snapshots: The Visibility Fence}
+
+\begin{lstlisting}[style=ascii]
+Snapshot format:  xmin : xmax : xip_list   (pg_current_snapshot())
+
+(a) "100:100:"    no transactions in flight at snapshot time
+
+ past <--[...][98][99](100)(101)(102)(103)(104)[...]--> future
+                    ^
+                   xmin=xmax=100
+ [n] = visible     (n) = invisible (active or not yet started)
+
+(b) "100:104:100,102"    txids 100 and 102 still in flight
+
+ past <--[...][98][99](100)[101](102)[103](104)(105)[...]--> future
+
+ 98,99:      committed before xmin         -> visible
+ 100,102:    in xip_list (in-progress)     -> invisible
+ 101,103:    committed, not in xip_list    -> visible
+ 104,105:    >= xmax, not yet started      -> invisible
+\end{lstlisting}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: Transaction Snapshots — READ COMMITTED vs REPEATABLE READ
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{Transaction Snapshots: When is Yours Taken?}
+
+\begin{lstlisting}[style=ascii]
+ time   T1: transfer (txid 200)   T2: READ COMMITTED    T3: REPEATABLE READ
+ ----   ----------------------    ------------------    -------------------
+  t1    BEGIN
+        UPDATE Arun 1000->700     BEGIN                 BEGIN
+  t2                              SELECT Arun           SELECT Arun
+                                  snapshot @ t2         snapshot @ t2
+                                  --> sees 1000         --> sees 1000
+  t3    COMMIT
+  t4                              SELECT Arun           SELECT Arun
+                                  NEW snapshot @ t4     SAME snapshot (t2)
+                                  --> sees 700          --> sees 1000
+\end{lstlisting}
+
+{\small \texttt{READ COMMITTED}: fresh snapshot per statement --- sees T1's commit at t4.\\
+\texttt{REPEATABLE READ}: snapshot fixed at \texttt{BEGIN} --- consistent view throughout.}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: Visibility Check Rules
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{Visibility Check Rules}
+
+\begin{lstlisting}[style=ascii]
+For each tuple, test xmin and xmax against the current snapshot:
+
+t_xmin ABORTED?               --> invisible  (rolled back)
+
+t_xmin IN_PROGRESS?
+  same txid, t_xmax = 0       --> visible    (my own insert)
+  otherwise                   --> invisible  (dirty read blocked)
+
+t_xmin COMMITTED?
+  t_xmin active in snapshot   --> invisible  (snapshot fence)
+  t_xmax = 0 or ABORTED       --> visible    (live tuple)
+  t_xmax IN_PROGRESS != me    --> visible    (concurrent delete pending)
+  t_xmax COMMITTED,
+    not active in snapshot     --> invisible  (deleted and visible)
+\end{lstlisting}
+
+  {\small Dirty reads are structurally impossible: a tuple written by an
+  in-progress transaction is always invisible to other sessions.}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: Lost Update motivation
+% -----------------------------------------------------------------------------
+\begin{frame}{The Lost Update Problem}
+
+  \begin{block}{}
+    MVCC guarantees readers never block writers and vice versa.\\[0.4em]
+    But what about two transactions that both read the same value
+    and then update it?  Does MVCC protect against that?
+  \end{block}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: Lost Update — Arun/Babita/Chirag example
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{The Lost Update Problem}
+
+\begin{lstlisting}[style=ascii]
+  Initial:  Arun=1000  Babita=500  Chirag=1500  (total = 3000)
+  ---------------------------------------------------------------
+  T1: Arun -> Babita (300)          T2: Chirag -> Arun (200)
+  --------------------------------  -------------------------------
+  BEGIN
+  SELECT Arun --> 1000
+                                    BEGIN
+                                    SELECT Arun --> 1000   (*)
+  new_balance = 1000 - 300 = 700
+  UPDATE Arun SET balance = 700
+  COMMIT
+                                    new_balance = 1000 + 200 = 1200
+                                    UPDATE Arun SET balance = 1200
+                                    COMMIT
+  ---------------------------------------------------------------
+  (*) T2 read Arun before T1 committed.  Computed from stale data.
+  Final:    Arun = 1200   Expected: Arun = 900
+  T1's debit of 300 is gone.
+\end{lstlisting}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: SELECT FOR UPDATE motivation
+% -----------------------------------------------------------------------------
+\begin{frame}{\texttt{SELECT FOR UPDATE}}
+
+  \begin{block}{}
+    A relative \texttt{UPDATE} is safe for simple arithmetic.
+    But some workflows must read a value first --- check a limit,
+    compute a fee, apply business logic --- before writing.\\[0.4em]
+    How do you make that read-then-write sequence atomic under
+    concurrent writers?
+  \end{block}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: SELECT FOR UPDATE — ASCII art (Arun example)
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{\texttt{SELECT FOR UPDATE}}
+
+\begin{lstlisting}[style=ascii]
+  Initial:  Arun=1000  Babita=500  Chirag=1500
+  ---------------------------------------------------------------
+  T1: Arun -> Babita (300)          T2: Chirag -> Arun (200)
+  --------------------------------  ------------------------------
+  BEGIN
+  SELECT Arun FOR UPDATE            BEGIN
+  --> ExclusiveLock acquired        SELECT Arun FOR UPDATE
+  --> Arun = 1000                   --> BLOCKS  (lock held by T1)
+  new_balance = 1000 - 300 = 700         |
+  UPDATE Arun SET balance = 700          |
+  COMMIT  --> lock released              |
+                                    --> unblocks
+                                    --> Arun = 700   (*)
+                                    new_balance = 700 + 200 = 900
+                                    UPDATE Arun SET balance = 900
+                                    COMMIT
+  ---------------------------------------------------------------
+  (*) T2 re-reads the post-commit value.  No stale data.
+  Final:    Arun = 900   Expected: Arun = 900   OK
+\end{lstlisting}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: SELECT FOR UPDATE — mechanics
+% -----------------------------------------------------------------------------
+\begin{frame}{\texttt{SELECT FOR UPDATE}: How It Works}
+
+  \begin{block}{Row-level ExclusiveLock}
+    \texttt{SELECT \ldots\ FOR UPDATE} acquires a row-level
+    \textbf{ExclusiveLock} \emph{before} returning the value to the
+    application.  A concurrent session attempting the same lock
+    blocks until the holder commits or rolls back.
+  \end{block}
+
+  \vspace{0.6em}
+
+  \begin{block}{REPEATABLE READ: first-updater-wins}
+    Under \texttt{REPEATABLE READ}, the waiting session does
+    \emph{not} silently overwrite.  On unblock it detects the
+    concurrent update and aborts with a serialization error.
+    The application must catch and retry.
+  \end{block}
+
+  \vspace{0.4em}
+  {\small Inspect live locks with \texttt{pg\_locks} and
+  \texttt{pg\_blocking\_pids()} --- Exercise 2.4.}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: Module 2 Exercises
+% -----------------------------------------------------------------------------
+\begin{frame}{Module 2: Hands-On Exercises}
+  \begin{columns}[T]
+    \column{0.48\textwidth}
+    \textbf{Exercise 2.1 --- Snapshot isolation}
+    \begin{itemize}\small
+      \item INSERT in Session A, don't commit
+      \item Session B cannot see it
+      \item Commit; Session B's next SELECT sees it
+    \end{itemize}
+
+    \vspace{0.4em}
+    \textbf{Exercise 2.2 --- Isolation levels}
+    \begin{itemize}\small
+      \item Session A in REPEATABLE READ: snapshot fixed
+      \item Session B inserts and commits
+      \item Session A re-counts: same result
+      \item Repeat with READ COMMITTED: different result
+    \end{itemize}
+
+    \column{0.48\textwidth}
+    \textbf{Exercise 2.3 --- Lost update}
+    \begin{itemize}\small
+      \item Race two sessions on the same row
+      \item Compare relative vs application read-modify-write
+      \item Observe which debit survives
+    \end{itemize}
+
+    \vspace{0.4em}
+    \textbf{Exercise 2.4 --- \texttt{SELECT FOR UPDATE}}
+    \begin{itemize}\small
+      \item Session A locks a row; Session B blocks
+      \item Inspect \texttt{pg\_locks} and \texttt{pg\_blocking\_pids()}
+      \item Session A commits; B unblocks on the post-commit value
+    \end{itemize}
+
+    \vspace{0.4em}
+    {\small\faTerminal\enspace
+    \texttt{modules/02-mvcc-concurrency/session\_\{a,b\}.sql}}
+  \end{columns}
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: VACUUM motivation
+% -----------------------------------------------------------------------------
+\begin{frame}{VACUUM}
+
+  \begin{block}{}
+    Every \texttt{UPDATE} leaves a dead tuple on the heap page.
+    Every \texttt{DELETE} leaves one too.\\[0.4em]
+    Dead tuples accumulate.  Concurrent readers may still need an old
+    version, so the database cannot reclaim it immediately.\\[0.4em]
+    Who cleans this up --- and when?
+  \end{block}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: VACUUM solution
+% -----------------------------------------------------------------------------
+\begin{frame}{VACUUM}
+
+  \begin{block}{}
+    \textbf{Autovacuum} runs in the background, scanning tables
+    periodically and reclaiming space occupied by dead tuples that
+    no active transaction can see any more.
+  \end{block}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: VACUUM overview
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{VACUUM: Overview}
+
+  \begin{columns}[T]
+    \column{0.52\textwidth}
+    \textbf{What VACUUM does:}
+    \begin{itemize}\small
+      \item Marks dead tuple slots as reusable (does \textit{not}
+            shrink the file)
+      \item Updates the \textbf{visibility map} --- pages with no dead
+            tuples are flagged and skipped on the next pass
+      \item \textbf{Freezes} old tuples, replacing their \texttt{xmin}
+            with a special frozen ID to prevent transaction ID
+            wraparound
+    \end{itemize}
+
+    \vspace{0.4em}
+    \textbf{Key signals:}
+    \begin{itemize}\small
+      \item \texttt{pg\_stat\_user\_tables.n\_dead\_tup} ---
+            dead tuple backlog
+      \item \texttt{age(datfrozenxid)} in \texttt{pg\_database} ---
+            distance from XID wraparound
+    \end{itemize}
+
+    \column{0.46\textwidth}
+\begin{lstlisting}[style=ascii]
+After many UPDATEs:
+
+heap page
++---------------------------+
+| dead | dead | live | live |
+|  tup |  tup |  tup |  tup |
++---------------------------+
+  ^      ^
+  VACUUM reclaims these slots;
+  space is reused for new tuples
+
+Without VACUUM:
+  page fills with dead tuples
+  --> new rows spill to new pages
+  --> table grows (bloat)
+  --> sequential scans slow down
+\end{lstlisting}
+  \end{columns}
+
+\end{frame}
+
+% =============================================================================
+\section{Takeaways}
+% =============================================================================
+
+\begin{frame}{Key Takeaways: WAL \& Durability}
+
+  \begin{block}{WAL \& Durability}
+    \begin{itemize}\small
+      \item WAL is why PostgreSQL survives crashes:
+            \textit{always write the log before the data page}
+      \item \texttt{synchronous\_commit} is the highest-leverage throughput
+            knob; measure sync \textit{counts}, not just timing
+      \item Checkpoints bound recovery time; tune \texttt{max\_wal\_size}
+            to balance throughput vs restart latency
+      \item Full-page images are unavoidable; reduce overhead with
+            \texttt{wal\_compression}
+    \end{itemize}
+  \end{block}
+
+\end{frame}
+
+\begin{frame}{Key Takeaways: MVCC \& Concurrency}
+
+  \begin{block}{MVCC \& Concurrency}
+    \begin{itemize}\small
+      \item MVCC prevents isolation anomalies without locking ---
+            each transaction sees a consistent snapshot; readers never block writers
+      \item Isolation level controls snapshot timing ---
+            READ COMMITTED re-snapshots per statement; REPEATABLE READ holds one
+      \item Lost updates are \textit{not} prevented by MVCC: use relative
+            \texttt{UPDATE} or \texttt{SELECT FOR UPDATE}
+      \item Dead tuples from every \texttt{UPDATE}/\texttt{DELETE} must be
+            reclaimed by VACUUM --- left unchecked, this becomes table bloat
+    \end{itemize}
+  \end{block}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: Thank You
+% -----------------------------------------------------------------------------
+\begin{frame}[standout]
+  \begin{center}
+    {\Large \textbf{Thank You!}}\\[0.8em]
+
+    {\normalsize Questions? Let's dig in.}\\[1.2em]
+
+    \href{https://github.com/amitprabhudesai/oltp-workloads-pg-workshop}{%
+      \faGithub\enspace\texttt{amitprabhudesai/oltp-workloads-pg-workshop}}\\[0.5em]
+
+    {\small Exercises, devcontainer, and these slides are all in the repo.}\\[0.8em]
+
+    \faEnvelope\enspace\texttt{prabhudesai.amit@gmail.com}
+  \end{center}
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Slide: References
+% -----------------------------------------------------------------------------
+\begin{frame}{References}
+  \begin{thebibliography}{9}
+
+    \bibitem{suzuki}
+      Hironobu Suzuki,
+      \textit{The Internals of PostgreSQL},
+      \url{https://www.interdb.jp/pg/}.
+      Chapter 5 (Concurrency Control) and Chapter 9 (WAL).
+      \copyright\ All Rights Reserved, Hironobu Suzuki.
+      Used for noncommercial educational purposes per the author's terms;
+      see \url{https://www.interdb.jp/pg/} for licence details.
+
+    \bibitem{pgdocs}
+      PostgreSQL Global Development Group,
+      \textit{PostgreSQL 16 Documentation},
+      \url{https://www.postgresql.org/docs/16/}.
+      Particularly: \textit{Reliability and the Write-Ahead Log}
+      and \textit{WAL Configuration}.
+
+    \bibitem{sosurvey}
+      Stack Overflow,
+      \textit{Developer Survey 2025 --- Technology},
+      \url{https://survey.stackoverflow.co/2025/technology}.
+      PostgreSQL \#1 most-used database, three years running (2023--2025).
+
+  \end{thebibliography}
+\end{frame}
+
+% =============================================================================
+% BONUS SECTION: Write Amplification — Where WAL Meets MVCC
+% =============================================================================
+\section{Bonus: Write Amplification}
+
+% -----------------------------------------------------------------------------
+% Motivation
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{One UPDATE. How Many WAL Records?}
+
+  \begin{block}{}
+    MVCC means every \texttt{UPDATE} is a new heap tuple.
+    When the updated column is indexed, the index must change too.\\[0.4em]
+    Two updates. Same table. Same row. How much WAL does each generate?
+  \end{block}
+
+  \vspace{0.5em}
+\begin{lstlisting}[style=ascii]
+-- A: balance is not indexed
+UPDATE accounts SET balance = balance - 100.00 WHERE id = 42;
+
+-- B: owner is indexed
+UPDATE accounts SET owner = 'alice_b' WHERE id = 42;
+\end{lstlisting}
+
+  \vspace{0.5em}
+  {\small One of these generates 3--4$\times$ more WAL than the other.
+  Which one, and why?}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Mechanism: HOT vs non-HOT
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{HOT Updates: Skipping the Index WAL}
+
+\begin{lstlisting}[style=ascii]
+-- A: balance not indexed -> HOT update
+-- Heap: one HOT_UPDATE record (~150 bytes)
+-- Btree: nothing
+
+-- B: owner indexed -> must update the index too
+-- Heap: one UPDATE record
+-- Btree: DELETE old entry + INSERT new entry (~2 records, ~600 bytes total)
+\end{lstlisting}
+
+  \vspace{0.5em}
+  \textbf{HOT (Heap Only Tuple)} fires when two conditions both hold:
+  \begin{enumerate}\small
+    \item No indexed column was changed
+    \item The new tuple fits on the \textit{same heap page} as the old one
+  \end{enumerate}
+
+  \vspace{0.3em}
+  Verify with \texttt{pg\_walinspect}:
+  \begin{itemize}\small
+    \item \texttt{resource\_manager = 'Btree'} records: 0 for HOT, 2 for indexed update
+    \item \texttt{record\_type = 'HOT\_UPDATE'} vs \texttt{'UPDATE'} in the Heap record
+  \end{itemize}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Practical lever 1: fillfactor
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{Lever 1: \texttt{fillfactor}}
+
+  HOT condition 2 --- new tuple fits on the same page --- fails when the page
+  is full. \texttt{fillfactor} reserves space so updates stay in-place.
+
+  \vspace{0.6em}
+\begin{lstlisting}[style=ascii]
+-- Default: fillfactor = 100 (pages packed full; HOT degrades as table grows)
+-- Better for update-heavy tables:
+CREATE TABLE accounts (...) WITH (fillfactor = 70);
+-- or on an existing table:
+ALTER TABLE accounts SET (fillfactor = 70);
+VACUUM accounts;   -- rewrites pages at the new fill target
+\end{lstlisting}
+
+  \vspace{0.6em}
+  \begin{itemize}
+    \item 70--80 is a common starting point for tables with frequent \texttt{UPDATE}s
+          on non-indexed columns
+    \item Trade-off: larger table footprint on disk, fewer pages per scan
+    \item Confirm HOT is firing: \texttt{pg\_stat\_user\_tables.n\_tup\_hot\_upd}
+          should be a large fraction of \texttt{n\_tup\_upd}
+  \end{itemize}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Practical lever 2: index audit
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{Lever 2: Index Audit}
+
+  Every index on a column that gets \texttt{UPDATE}d forces non-HOT writes
+  and Btree WAL --- whether or not the index is ever used by a query.
+
+  \vspace{0.6em}
+\begin{lstlisting}[style=ascii]
+-- Find indexes with zero scans since last stats reset
+SELECT schemaname, relname, indexrelname, idx_scan
+FROM   pg_stat_user_indexes
+WHERE  idx_scan = 0
+ORDER  BY schemaname, relname;
+\end{lstlisting}
+
+  \vspace{0.6em}
+  \begin{itemize}
+    \item \texttt{idx\_scan = 0} is a candidate for removal ---
+          but check \texttt{pg\_stat\_reset()} history first
+    \item Partial indexes (\texttt{WHERE status = 'pending'}) cover fewer rows
+          and are HOT-compatible for rows outside the partial condition
+    \item Before dropping: \texttt{pg\_get\_wal\_records\_info()} to confirm
+          the index is contributing Btree WAL on your hottest \texttt{UPDATE} path
+  \end{itemize}
+
+\end{frame}
+
+% =============================================================================
+% APPENDIX
+% =============================================================================
+\appendix
+
+\begin{frame}[standout]
+  \begin{center}
+    {\Large \textbf{Appendix}}\\[0.5em]
+    {\normalsize PostgreSQL internals --- deeper cuts}
+  \end{center}
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Appendix A1: Internal layout of WAL segment file
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{A1. Internal Layout of a WAL Segment}
+
+  \begin{columns}[T]
+    \column{0.48\textwidth}
+    A WAL segment is \textbf{16\,MB} by default, subdivided into
+    \textbf{8\,kB pages}:
+    \begin{itemize}\small
+      \item \textbf{Page 0}: \texttt{XLogLongPageHeaderData} ---
+            includes \texttt{xlp\_sysid}, segment size, block size;
+            used as a cross-check on open
+      \item \textbf{Pages 1+}: \texttt{XLogPageHeaderData} ---
+            includes \texttt{xlp\_magic}, \texttt{xlp\_tli},
+            \texttt{xlp\_pageaddr}, \texttt{xlp\_rem\_len}
+      \item XLOG records written sequentially; a record may
+            \textit{span} page boundaries
+            (\texttt{xlp\_rem\_len} tracks the continuation length)
+    \end{itemize}
+
+    \column{0.50\textwidth}
+\begin{lstlisting}[style=ascii]
+WAL segment (16 MB = 2048 x 8 kB pages)
++------------------------------+
+| Page 0 (8 kB)                |
+| XLogLongPageHeaderData       |
+|  xlp_sysid  xlp_seg_size     |
+|  xlp_xlog_blcksz             |
+| +---------------------------+|
+| | XLOG record 1             ||
+| | XLOG record 2             ||
+| | XLOG record 3 (partial)   ||
++------------------------------+
+| Page 1 (8 kB)                |
+| XLogPageHeaderData           |
+|  xlp_rem_len (continuation)  |
+| +---------------------------+|
+| | ... record 3 continued    ||
+| | XLOG record 4             ||
++------------------------------+
+| Page 2  ...  Page 2047       |
++------------------------------+
+\end{lstlisting}
+  \end{columns}
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Appendix A2: Internal layout of XLOG record
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{A2. Internal Layout of an XLOG Record}
+
+  \begin{columns}[T]
+    \column{0.46\textwidth}
+    Since PostgreSQL 9.5, XLOG records use a common structured format.
+
+    \vspace{0.3em}
+    \textbf{Header} (\texttt{XLogRecord}):
+    \begin{itemize}\small
+      \item \texttt{xl\_tot\_len} --- total record length
+      \item \texttt{xl\_xid} --- transaction ID
+      \item \texttt{xl\_prev} --- LSN of previous record
+      \item \texttt{xl\_rmid} / \texttt{xl\_info} --- resource manager
+            and subtype (e.g.\ \texttt{RM\_HEAP} +
+            \texttt{XLOG\_HEAP\_INSERT})
+      \item \texttt{xl\_crc} --- integrity check
+    \end{itemize}
+
+    \vspace{0.2em}
+    {\small Recovery dispatches to the right replay function
+    (\texttt{heap\_xlog\_insert}, \texttt{heap\_xlog\_update}, \ldots)
+    via \texttt{xl\_rmid} + \texttt{xl\_info}.}
+
+    \column{0.52\textwidth}
+\begin{lstlisting}[style=ascii]
+Non-backup block (INSERT delta):
++-----------------------+
+| XLogRecord (header)   |
+|  xl_rmid=RM_HEAP      |
+|  xl_info=HEAP_INSERT  |
++-----------------------+
+| XLogRecordBlockHeader |
+|  relfilenode, fork,   |
+|  block_no, data_len   |
++-----------------------+
+| XLogRecordDataHeader  |
++-----------------------+
+| block data (delta)    |
++-----------------------+
+| xl_heap_insert (main) |
++-----------------------+
+
+Backup block: block data replaced by
+full 8 kB page (FPI); adds
+XLogRecordBlockImageHeader with
+length, hole_offset, bimg_info.
+\end{lstlisting}
+  \end{columns}
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Appendix A3: Tuple Structure
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile,label=frA3]{A3. Tuple Structure}
+
+  \begin{columns}[T]
+    \column{0.5\textwidth}
+    Each row version on a heap page is a \textbf{HeapTuple}:
+    \begin{itemize}\small
+      \item \textbf{\texttt{t\_xmin}} --- inserting transaction ID
+      \item \textbf{\texttt{t\_xmax}} --- deleting/updating transaction ID (0 = live)
+      \item \textbf{\texttt{t\_ctid}} --- pointer to the newer version of this row
+            (self-referential if this is the latest)
+      \item \textbf{\texttt{t\_infomask}} --- hint bits for commit status
+            (avoids repeated clog lookups)
+      \item \textbf{\texttt{t\_hoff}} --- offset to user data
+    \end{itemize}
+
+    \column{0.48\textwidth}
+\begin{lstlisting}[style=ascii]
+heap page (8 kB)
++-------------------------------+
+| PageHeader                    |
++------+------+------+----------+
+| lp1  | lp2  | lp3  | ...      | <- ItemId array
++------+------+------+----------+
+|   free space (grows inward)   |
++------+---+---+----------------+
+| tuple3 | tuple2 | tuple1      |
++--------+--------+-------------+
+
+Each ItemId:
+  lp_off   -- byte offset to tuple
+  lp_flags -- Normal/Redirect/Dead/Unused
+\end{lstlisting}
+  \end{columns}
+  {\small \texttt{t\_ctid} forms the version chain: old tuple points to new.
+  VACUUM marks dead ItemIds as \texttt{Unused} and reclaims their space.}
+
+  \vspace{0.3em}
+  \hyperlink{frTupleInsert}{\beamerreturnbutton{Back}}
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Appendix A4: Buffer Manager Structure
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{A4. Buffer Manager Structure}
+
+  \begin{columns}[T]
+    \column{0.62\textwidth}
+    Three layers between a backend and a page on disk:
+
+\begin{lstlisting}[style=ascii,basicstyle=\ttfamily\tiny]
+Buffer Table       Descriptors        Buffer Pool
+(tag->buf_id)      (one per slot)     (8 kB slots)
+
+[rel,blk=7]  -->  buf_id=0            slot 0 +--------+
+                  tag=[rel,7]                | page 7  |
+                  dirty=Y  usage=3           | 8 kB    |
+                  refcnt=0                   +--------+
+
+[rel,blk=12] -->  buf_id=1            slot 1 +--------+
+                  tag=[rel,12]               | page 12 |
+                  dirty=N  usage=1           | 8 kB    |
+                  refcnt=2 (pinned)          +--------+
+
+freelist     -->  buf_id=2 (empty)    slot 2 +--------+
+                                             | [free]  |
+                                             +--------+
+\end{lstlisting}
+
+    \column{0.35\textwidth}
+    \textbf{Key descriptor fields:}
+    \begin{itemize}\small
+      \item \textbf{tag} --- \texttt{(relfilenode,}
+            \texttt{fork, block\_number)}
+      \item \textbf{dirty} --- modified; must reach
+            disk before slot is reused
+      \item \textbf{refcount} --- pin count;
+            \texttt{refcnt\,>\,0} blocks eviction
+      \item \textbf{usage\_count} --- access
+            frequency; drives \textbf{clock-sweep}
+      \item \textbf{freelist} --- empty descriptors
+            chained at startup
+    \end{itemize}
+
+    \vspace{0.3em}
+    {\small \texttt{shared\_buffers}: default 128\,MB;
+    typically 25\,\% of RAM in production.}
+  \end{columns}
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Appendix A5: INSERT / DELETE / UPDATE on the Heap
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{A5. INSERT, DELETE, UPDATE on the Heap}
+
+\begin{lstlisting}[style=ascii]
+INSERT:
+  tuple_1: xmin=100 xmax=0   ctid=(0,1)  name='Jekyll'
+  -- one new tuple, no dead tuple
+
+DELETE (by txid 200):
+  tuple_1: xmin=100 xmax=200 ctid=(0,1)  name='Jekyll'
+  -- tuple_1 is now "dead" once txid 200 commits
+  -- still physically on disk until VACUUM
+
+UPDATE (by txid 201):
+  tuple_1: xmin=100 xmax=201 ctid=(0,2)  name='Jekyll'  <- dead
+  tuple_2: xmin=201 xmax=0   ctid=(0,2)  name='Hyde'    <- live
+  -- UPDATE = logical DELETE + INSERT
+  -- Every UPDATE creates one dead tuple
+  -- Hot heavy-update tables bloat without VACUUM
+\end{lstlisting}
+
+  {\small \texttt{t\_ctid} in tuple\_1 points to tuple\_2, so index scans can
+  follow the chain to the live version without re-scanning.
+  This is the basis of \textbf{HOT} (Heap Only Tuple) updates.}
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Appendix A6: exec_simple_query() — the WAL write path
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{A6. \texttt{exec\_simple\_query()}: WAL Write Path}
+
+\begin{lstlisting}[style=ascii]
+exec_simple_query()                         [postgres.c]
+  |
+  +-- (1) ExtendCLOG()                      [clog.c]
+  |        mark txid IN_PROGRESS in CLOG
+  |
+  +-- (2) heap_insert()                     [heapam.c]
+  |        insert tuple into shared buffer page
+  |   |
+  |   +-- (3) XLogInsert()                  [xloginsert.c]
+  |            write Heap/INSERT record to WAL buffer
+  |            update page pd_lsn := LSN_1
+  |
+  +-- (4) finish_xact_command()             [postgres.c]
+      |    commit action
+      |
+      +-- (4a) XLogInsert()                 [xloginsert.c]
+      |         write Commit record to WAL buffer (LSN_2)
+      |
+      +-- (5) XLogWrite()                   [xlog.c]
+      |        flush WAL buffer -> WAL segment file
+      |        (fsync / fdatasync / O_DSYNC per wal_sync_method)
+      |
+      +-- (6) TransactionIdCommitTree()     [transam.c]
+               mark txid COMMITTED in CLOG
+\end{lstlisting}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Appendix A7: WAL as a change stream — logical decoding (concepts)
+% -----------------------------------------------------------------------------
+\begin{frame}{A7. WAL as a Change Stream: Logical Decoding}
+
+  \textbf{How it works}
+  \begin{itemize}
+    \item \texttt{wal\_level = logical} records enough context to reconstruct row-level changes
+    \item A \textbf{replication slot} pins WAL until the consumer ACKs each LSN — guarantees no gaps
+    \item Output plugins decode raw XLOG records into a change stream:\\
+          \texttt{test\_decoding} (built-in), \texttt{wal2json}, \texttt{pgoutput} (logical replication)
+  \end{itemize}
+
+  \vspace{0.8em}
+  \textbf{Production uses}
+  \begin{itemize}
+    \item CDC pipelines — Debezium, Airbyte, Fivetran
+    \item Audit logs without triggers
+    \item Live zero-downtime migrations
+    \item Event sourcing / outbox pattern
+  \end{itemize}
+
+  \vspace{0.8em}
+  {\small \textbf{Operational gotcha:} an unconsumed slot holds WAL indefinitely.
+  Monitor \texttt{pg\_replication\_slots.wal\_status} and set
+  \texttt{max\_slot\_wal\_keep\_size} to bound disk exposure.}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Appendix A7b: Logical decoding — psql output
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{A7b. Logical Decoding: Reading the Change Stream}
+
+\begin{lstlisting}[style=ascii]
+-- One-time setup (superuser)
+SELECT pg_create_logical_replication_slot('audit', 'test_decoding');
+
+-- peek: non-destructive; get: advances the slot
+SELECT lsn, xid, data
+FROM pg_logical_slot_peek_changes('audit', NULL, NULL);
+
+ lsn       | xid  | data
+-----------+------+----------------------------------------------------------
+ 0/9368D48 | 1001 | BEGIN 1001
+ 0/9368DB0 | 1001 | table rootconf.accounts: INSERT: id[bigint]:264
+           |      |   owner[text]:'alice'  balance[numeric]:100.00
+ 0/936BB80 | 1001 | COMMIT 1001
+ 0/936BB80 | 1002 | BEGIN 1002
+ 0/936BB80 | 1002 | table rootconf.accounts: UPDATE: id[bigint]:264
+           |      |   balance[numeric]:200.00
+ 0/936BC18 | 1002 | COMMIT 1002
+\end{lstlisting}
+
+  \vspace{0.4em}
+  {\small Each decoded event carries the LSN, transaction boundary, and full
+  column values — exactly what a CDC consumer ingests.}
+
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Appendix A8: Commit Log (clog)
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{A8. Commit Log (clog)}
+
+  \begin{columns}[T]
+    \column{0.54\textwidth}
+    \textbf{What is clog?}
+    \begin{itemize}\small
+      \item Stores the \textit{commit status} of every transaction: \\
+            IN\_PROGRESS / COMMITTED / ABORTED / SUB\_COMMITTED
+      \item Physical location: \texttt{\$PGDATA/pg\_xact/}
+      \item 2 bits per transaction; 256 kB file covers 1M transactions
+      \item Cached in shared memory (\texttt{pg\_xact} buffer pool)
+      \item Visibility checks consult clog to evaluate
+            \texttt{t\_xmin}/\texttt{t\_xmax} status
+    \end{itemize}
+
+    \column{0.44\textwidth}
+\begin{lstlisting}[style=ascii]
+pg_xact/0000  (first file)
+  txid 0: IN_PROGRESS
+  txid 1: COMMITTED
+  txid 2: ABORTED
+  ...
+
+Each 2-bit entry:
+  00 = IN_PROGRESS
+  01 = COMMITTED
+  10 = ABORTED
+  11 = SUB_COMMITTED
+\end{lstlisting}
+    {\scriptsize Old clog files removed by\\
+    VACUUM once all transactions\\
+    referencing them are frozen.}
+  \end{columns}
+
+  \vspace{0.2em}
+  {\small \textbf{Hint bits} (\texttt{t\_infomask}) cache the result of clog
+  lookups directly in the tuple header, so subsequent reads skip the clog
+  entirely for already-settled transactions.}
+\end{frame}
+
+% -----------------------------------------------------------------------------
+% Appendix A9: VACUUM — Dead Tuples, Bloat, Wraparound
+% -----------------------------------------------------------------------------
+\begin{frame}[fragile]{A9. VACUUM: Dead Tuples, Bloat, and Wraparound}
+
+  \begin{columns}[T]
+    \column{0.52\textwidth}
+    \textbf{Why VACUUM exists:}
+    \begin{itemize}\small
+      \item Every \texttt{UPDATE}/\texttt{DELETE} leaves a \textit{dead tuple}
+            on disk --- MVCC cannot reclaim it immediately
+      \item Concurrent readers might still need the old version
+      \item \textbf{Autovacuum} (default: on) scans tables periodically and
+            reclaims dead tuple space; \texttt{pg\_stat\_user\_tables.n\_dead\_tup}
+            shows the backlog
+      \item Unchecked: pages fill with dead tuples, table grows
+            (\textit{bloat}), sequential scans slow down
+    \end{itemize}
+
+    \column{0.46\textwidth}
+    \textbf{Transaction ID wraparound:}
+    \begin{itemize}\small
+      \item txid is a 32-bit counter: wraps at $\sim$4 billion
+      \item PostgreSQL uses modular arithmetic with a $2^{31}$ horizon:
+            tuples with \texttt{xmin} older than $2^{31}$ become \textit{in the future} ---
+            a catastrophic visibility inversion
+      \item Fix: VACUUM \textit{freezes} old tuples,
+            replacing their \texttt{xmin} with a special frozen txid
+            that is always visible
+    \end{itemize}
+\begin{lstlisting}[style=sql]
+-- How far are we from wraparound?
+SELECT datname,
+  age(datfrozenxid) AS xid_age
+FROM pg_database
+ORDER BY xid_age DESC;
+\end{lstlisting}
+  \end{columns}
+  {\small Autovacuum warns at 200\,M transactions from wraparound;
+  PostgreSQL forces a shutdown at 3\,M to prevent data loss.}
+\end{frame}
+
+% =============================================================================
+\end{document}
