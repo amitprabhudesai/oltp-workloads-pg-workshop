@@ -41,3 +41,22 @@ BEGIN;
 INSERT INTO accounts (owner, balance) VALUES ('_regress_aborted', 50.00);
 ROLLBACK;
 SELECT pg_current_wal_insert_lsn() > :'snap' AS rollback_advances_lsn;
+
+-- 1.5  HOT UPDATE: non-indexed column update produces only Heap WAL, no Btree WAL
+INSERT INTO accounts (owner, balance) VALUES ('_regress_hot', 100.00);
+CHECKPOINT;
+SELECT pg_current_wal_lsn() AS snap \gset
+UPDATE accounts SET balance = 200.00 WHERE owner = '_regress_hot';
+SELECT pg_current_wal_lsn() AS end_lsn \gset
+
+SELECT count(*) > 0 AS hot_update_has_heap_fpi
+FROM pg_get_wal_records_info(:'snap', :'end_lsn')
+WHERE resource_manager = 'Heap' AND fpi_length > 0;
+
+SELECT count(*) = 0 AS hot_update_no_btree_fpi
+FROM pg_get_wal_records_info(:'snap', :'end_lsn')
+WHERE resource_manager = 'Btree' AND fpi_length > 0;
+
+DO $$ BEGIN
+    DELETE FROM accounts WHERE owner = '_regress_hot';
+END; $$;
